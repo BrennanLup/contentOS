@@ -1,0 +1,10 @@
+.git
+.gitignore
+**/venv
+**/node_modules
+**/__pycache__
+backend/uploads
+backend/results
+**/*.mp4
+frontend/dist
+**/.vite

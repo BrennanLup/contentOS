@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Reel Analysis - Video Deconstruction</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 2rem;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        header {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 2rem;
+            border-radius: 20px;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+        
+        .subtitle {
+            color: #666;
+            font-size: 1.1rem;
+        }
+        
+        .video-link {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+        
+        .video-link a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .analysis-container {
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+        
+        .analysis-header {
+            padding: 2rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .video-stats {
+            display: flex;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+        
+        .stat {
+            background: rgba(255, 255, 255, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 15px;
+        }
+        
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        
+        .tab {
+            flex: 1;
+            padding: 1rem 2rem;
+            background: none;
+            border: none;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #999;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+        
+        .tab-content {
+            display: none;
+            padding: 2rem;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .shots-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .shot-card {
+            background: #f8f9fa;
+            border-radius: 15px;
+            overflow: hidden;
+            border: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        
+        .shot-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+            border-color: #667eea;
+        }
+        
+        .shot-thumbnail {
+            width: 100%;
+            height: 180px;
+            background: #e0e0e0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .shot-thumbnail img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        
+        .shot-info {
+            padding: 1rem;
+        }
+        
+        .shot-info h3 {
+            color: #333;
+            margin-bottom: 0.5rem;
+        }
+        
+        .shot-time {
+            color: #667eea;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        
+        .shot-duration {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .shot-transcript {
+            margin-top: 0.75rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid #ddd;
+        }
+        
+        .shot-transcript strong {
+            color: #555;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .transcript-segment {
+            color: #666;
+            font-style: italic;
+            margin: 0.25rem 0;
+            font-size: 0.9rem;
+        }
+        
+        .transcript-full {
+            background: #f8f9fa;
+            padding: 2rem;
+            border-radius: 15px;
+            margin-bottom: 2rem;
+        }
+        
+        .transcript-full h3 {
+            color: #333;
+            margin-bottom: 1rem;
+        }
+        
+        .transcript-text {
+            color: #555;
+            line-height: 1.8;
+            font-size: 1.05rem;
+        }
+        
+        .actions {
+            padding: 2rem;
+            background: #f8f9fa;
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+        }
+        
+        .btn {
+            padding: 0.75rem 2rem;
+            border-radius: 25px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: white;
+            color: #667eea;
+            border: 2px solid #667eea;
+        }
+        
+        .btn-secondary:hover {
+            background: #667eea;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Instagram Reel Analysis</h1>
+            <p class="subtitle">Video Deconstruction Tool - Shot-by-Shot Breakdown</p>
+            <div class="video-link">
+                <strong>Source:</strong> <a href="https://www.instagram.com/reel/DX4bRV6IHEn/" target="_blank">Instagram Reel DX4bRV6IHEn</a>
+            </div>
+        </header>
+        
+        <div class="analysis-container">
+            <div class="analysis-header">
+                <h2>✅ Analysis Complete</h2>
+                <div class="video-stats">
+                    <span class="stat">⏱️ 11.13s</span>
+                    <span class="stat">🎬 10 shots</span>
+                    <span class="stat">📐 1080x1920</span>
+                    <span class="stat">🎞️ 60 fps</span>
+                </div>
+            </div>
+            
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('shots')">🎬 Shots (10)</button>
+                <button class="tab" onclick="showTab('transcript')">📝 Full Transcript</button>
+            </div>
+            
+            <div id="shots" class="tab-content active">
+                <div class="shots-grid" id="shotsGrid"></div>
+            </div>
+            
+            <div id="transcript" class="tab-content">
+                <div class="transcript-full">
+                    <h3>Full Transcript</h3>
+                    <p class="transcript-text" id="fullTranscript"></p>
+                </div>
+            </div>
+            
+            <div class="actions">
+                <a href="http://localhost:3000" class="btn btn-primary">← Analyze Another Video</a>
+                <button onclick="downloadJSON()" class="btn btn-secondary">💾 Download JSON</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const analysisData = {
+            "job_id": "test_job",
+            "video_metadata": {
+                "duration": 11.133333333333333,
+                "fps": 60.0,
+                "width": 1080,
+                "height": 1920,
+                "total_frames": 668
+            },
+            "shots": [
+                {
+                    "shot_index": 0,
+                    "start_time": 0,
+                    "end_time": 0.55,
+                    "duration": 0.55,
+                    "transcript_segments": [{"text": "I need you to tell me"}]
+                },
+                {
+                    "shot_index": 1,
+                    "start_time": 0.55,
+                    "end_time": 1.73,
+                    "duration": 1.18
+                },
+                {
+                    "shot_index": 2,
+                    "start_time": 1.73,
+                    "end_time": 2.62,
+                    "duration": 0.88
+                },
+                {
+                    "shot_index": 3,
+                    "start_time": 2.62,
+                    "end_time": 4.42,
+                    "duration": 1.80
+                },
+                {
+                    "shot_index": 4,
+                    "start_time": 4.42,
+                    "end_time": 5.33,
+                    "duration": 0.92
+                },
+                {
+                    "shot_index": 5,
+                    "start_time": 5.33,
+                    "end_time": 5.83,
+                    "duration": 0.50
+                },
+                {
+                    "shot_index": 6,
+                    "start_time": 5.83,
+                    "end_time": 6.72,
+                    "duration": 0.88
+                },
+                {
+                    "shot_index": 7,
+                    "start_time": 6.72,
+                    "end_time": 8.15,
+                    "duration": 1.43
+                },
+                {
+                    "shot_index": 8,
+                    "start_time": 8.15,
+                    "end_time": 9.62,
+                    "duration": 1.47
+                },
+                {
+                    "shot_index": 9,
+                    "start_time": 9.62,
+                    "end_time": 11.13,
+                    "duration": 1.52
+                }
+            ],
+            "transcript": {
+                "full_text": "I need you to tell me",
+                "segments": [
+                    {
+                        "start": 0.0,
+                        "end": 2.0,
+                        "text": "I need you to tell me"
+                    }
+                ]
+            },
+            "shot_count": 10
+        };
+        
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+        
+        function renderShots() {
+            const grid = document.getElementById('shotsGrid');
+            
+            analysisData.shots.forEach((shot, idx) => {
+                const card = document.createElement('div');
+                card.className = 'shot-card';
+                
+                let transcriptHTML = '';
+                if (shot.transcript_segments && shot.transcript_segments.length > 0) {
+                    transcriptHTML = `
+                        <div class="shot-transcript">
+                            <strong>Speech:</strong>
+                            ${shot.transcript_segments.map(seg => 
+                                `<p class="transcript-segment">"${seg.text}"</p>`
+                            ).join('')}
+                        </div>
+                    `;
+                }
+                
+                card.innerHTML = `
+                    <div class="shot-thumbnail">
+                        <img src="http://localhost:5000/api/thumbnail/test_job/${idx}" 
+                             alt="Shot ${idx + 1}"
+                             onerror="this.parentElement.innerHTML='<div style=\\'font-size: 3rem; color: #999;\\'>🎬</div>'">
+                    </div>
+                    <div class="shot-info">
+                        <h3>Shot ${idx + 1}</h3>
+                        <p class="shot-time">${formatTime(shot.start_time)} - ${formatTime(shot.end_time)}</p>
+                        <p class="shot-duration">Duration: ${shot.duration.toFixed(2)}s</p>
+                        ${transcriptHTML}
+                    </div>
+                `;
+                
+                grid.appendChild(card);
+            });
+        }
+        
+        function showTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+        
+        function downloadJSON() {
+            const blob = new Blob([JSON.stringify(analysisData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'instagram-reel-analysis.json';
+            a.click();
+        }
+        
+        // Initialize
+        document.getElementById('fullTranscript').textContent = analysisData.transcript.full_text;
+        renderShots();
+    </script>
+</body>
+</html>
