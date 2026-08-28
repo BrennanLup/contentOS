@@ -1,10 +1,10 @@
-# brennan.fit
+# contentOS
 
-A fitness tracking and wellness application.
+A content management and organization system.
 
 ## Overview
 
-This repository contains the brennan.fit project, designed to help users track their fitness goals and maintain a healthy lifestyle.
+This repository contains the contentOS project, a system for managing and organizing content.
 
 ## Getting Started
 
