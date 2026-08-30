@@ -2,12 +2,15 @@ import React, { useState } from 'react'
 import VideoInput from './components/VideoInput'
 import VideoAnalysis from './components/VideoAnalysis'
 import ProcessMindmap from './components/ProcessMindmap'
+import ViralRadar from './components/ViralRadar'
 import './App.css'
 
 function App() {
+  const [tool, setTool] = useState('radar')
   const [analysisResult, setAnalysisResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [pendingUrl, setPendingUrl] = useState('')
 
   const handleAnalysisComplete = (result) => {
     setAnalysisResult(result)
@@ -21,8 +24,8 @@ function App() {
     setAnalysisResult(null)
   }
 
-  const handleError = (error) => {
-    setError(error)
+  const handleError = (errorMessage) => {
+    setError(errorMessage)
     setLoading(false)
   }
 
@@ -30,6 +33,15 @@ function App() {
     setAnalysisResult(null)
     setError(null)
     setLoading(false)
+    setPendingUrl('')
+  }
+
+  const handleDeconstruct = (url) => {
+    setPendingUrl(url)
+    setAnalysisResult(null)
+    setError(null)
+    setLoading(false)
+    setTool('deconstruct')
   }
 
   return (
@@ -37,20 +49,41 @@ function App() {
       <ProcessMindmap />
       <div className="app">
         <header className="app-header">
-          <h1>🎬 Video Deconstruction Tool</h1>
-          <p>Break down videos from YouTube, TikTok, Instagram into shots and scripts</p>
+          <h1>contentOS</h1>
+          <p>Find what is working in your space, then break it down shot by shot</p>
+          <nav className="tool-nav">
+            <button
+              type="button"
+              className={tool === 'radar' ? 'active' : ''}
+              onClick={() => setTool('radar')}
+            >
+              Viral Radar
+            </button>
+            <button
+              type="button"
+              className={tool === 'deconstruct' ? 'active' : ''}
+              onClick={() => setTool('deconstruct')}
+            >
+              Deconstruct
+            </button>
+          </nav>
         </header>
 
-        <main className="app-main">
-          {!analysisResult && !loading && (
-            <VideoInput 
+        <main className={`app-main ${tool}`}>
+          {tool === 'radar' && (
+            <ViralRadar onDeconstruct={handleDeconstruct} />
+          )}
+
+          {tool === 'deconstruct' && !analysisResult && !loading && (
+            <VideoInput
+              initialUrl={pendingUrl}
               onAnalysisComplete={handleAnalysisComplete}
               onAnalysisStart={handleAnalysisStart}
               onError={handleError}
             />
           )}
 
-          {loading && (
+          {tool === 'deconstruct' && loading && (
             <div className="loading-container">
               <div className="spinner"></div>
               <h2>Analyzing Video...</h2>
@@ -64,7 +97,7 @@ function App() {
             </div>
           )}
 
-          {error && (
+          {tool === 'deconstruct' && error && (
             <div className="error-container">
               <h2>❌ Error</h2>
               <p>{error}</p>
@@ -74,16 +107,16 @@ function App() {
             </div>
           )}
 
-          {analysisResult && (
-            <VideoAnalysis 
-              result={analysisResult} 
+          {tool === 'deconstruct' && analysisResult && (
+            <VideoAnalysis
+              result={analysisResult}
               onReset={handleReset}
             />
           )}
         </main>
 
         <footer className="app-footer">
-          <p>Supports YouTube, TikTok, Instagram, and direct video uploads</p>
+          <p>Viral Radar tracks Instagram + YouTube. Deconstruct supports YouTube, TikTok, Instagram, and uploads.</p>
         </footer>
       </div>
     </div>

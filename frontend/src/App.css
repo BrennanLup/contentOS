@@ -30,12 +30,38 @@
   font-size: 1.1rem;
 }
 
+.tool-nav {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
+}
+
+.tool-nav button {
+  background: #f4f4f8;
+  border: none;
+  color: #555;
+  padding: 0.6rem 1.4rem;
+  border-radius: 999px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tool-nav button.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
 .app-main {
   flex: 1;
   display: flex;
   justify-content: center;
   align-items: center;
   padding: 2rem;
+}
+
+.app-main.radar {
+  align-items: flex-start;
 }
 
 .app-footer {

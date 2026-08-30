@@ -1,20 +1,15 @@
-# contentOS - Video Content Deconstruction Tool
+# contentOS
 
-A powerful web application that analyzes videos from YouTube, TikTok, Instagram, and direct uploads to break them down into individual shots with synchronized transcripts. Perfect for content creators who want to deconstruct and recreate viral videos!
+A content operating system for creators: **scan what is going viral in your space**, then **deconstruct** those videos shot by shot.
 
 ## ✨ Features
 
-- **Multi-Platform Support**: Download and analyze videos from:
-  - YouTube
-  - TikTok
-  - Instagram
-  - Direct video file uploads
-
+- **Viral Radar**: Track Instagram and YouTube creators on a watchlist, rank their recent posts by virality, and discover new people in the same niches (Triathlon, Advice, or any niche you add)
+- **Multi-Platform Deconstruct**: Download and analyze videos from YouTube, TikTok, Instagram, or direct uploads
 - **Shot Detection**: Automatically detects scene changes and breaks videos into individual shots
 - **Speech Transcription**: Uses OpenAI Whisper to transcribe audio with timestamps
 - **Thumbnail Generation**: Creates preview images for each detected shot
 - **Export Options**: Export analysis as JSON or formatted text scripts
-- **Modern UI**: Beautiful, responsive interface with real-time progress tracking
 
 ## 🚀 Deploy to Railway
 
@@ -31,13 +26,14 @@ You will get a public URL like `https://<service>.up.railway.app`
 ## 🏗️ Architecture
 
 ### Backend (Python Flask)
+- Viral Radar via `yt-dlp` metadata (no full video download)
 - Video downloading via `yt-dlp`
 - Shot detection using OpenCV
 - Audio transcription with Whisper AI
-- RESTful API for video processing
+- RESTful API for scans and video processing
 
 ### Frontend (React)
-- Modern React with Vite
+- Viral Radar watchlist, ranked feed, and new-creator suggestions
 - Drag-and-drop file upload
 - URL input for social media videos
 - Interactive shot timeline
@@ -151,14 +147,36 @@ Process an uploaded video file
 
 **Request:** `multipart/form-data` with video file
 
+### `GET /api/creators`
+List watchlist creators and niches. Seeded with triathlon and advice accounts.
+
+### `POST /api/creators`
+Add an Instagram and/or YouTube creator to the watchlist.
+
+### `POST /api/viral/scan`
+Queue a background scan. Set `include_discovery` to also search YouTube for new people in each niche.
+
+### `GET /api/viral/latest`
+Return the most recent ranked scan.
+
 ### `GET /api/jobs/<job_id>`
-Get job status and results
+Get job status and results for video processing or a viral scan.
 
 ### `GET /api/thumbnail/<job_id>/<shot_index>`
 Get thumbnail image for a specific shot
 
 ## 🎯 How It Works
 
+### Viral Radar
+1. Keep a watchlist of Instagram handles and optional YouTube channels
+2. Scan recent posts with `yt-dlp` (metadata only)
+3. Rank by a virality score: views, likes, recency, and how far a post overperforms that creator's median
+4. Discover new people by searching YouTube for each niche (triathlon, advice, or custom)
+5. Click **Deconstruct** on a viral post to send it into the shot/transcript tool
+
+Instagram profile scrapes often need a cookies file (`YTDLP_COOKIES`) because Instagram blocks anonymous listing. YouTube scans work without cookies. Add a YouTube URL on each creator for the most reliable results.
+
+### Video deconstruction
 1. **Video Acquisition**: Videos are downloaded via `yt-dlp` or uploaded directly
 2. **Shot Detection**: OpenCV analyzes frame-by-frame differences to detect scene changes
 3. **Transcription**: Whisper AI transcribes audio with precise timestamps
