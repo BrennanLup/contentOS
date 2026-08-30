@@ -226,15 +226,6 @@
   line-height: 1.45;
 }
 
-.mm-lead {
-  margin-bottom: 0.75rem;
-}
-
-.mm-empty {
-  margin-top: 0.5rem;
-}
-
-.mm-add-row,
 .mm-field,
 .mm-sliders {
   display: flex;
@@ -243,9 +234,28 @@
   margin-bottom: 0.7rem;
 }
 
+.mm-empty {
+  margin-top: 0.5rem;
+}
+
 .mm-add-row {
-  flex-direction: row;
-  flex-wrap: wrap;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 0.7rem;
+}
+
+.mm-add-row-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.mm-add-row-actions select {
+  flex: 1;
+}
+
+.mm-add-row input {
+  width: 100%;
 }
 
 .mm-add-row input,

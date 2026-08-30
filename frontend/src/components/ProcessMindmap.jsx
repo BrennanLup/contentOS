@@ -12,7 +12,7 @@ function rankedIdeas(ideas) {
   return [...ideas].sort((a, b) => ideaScore(b) - ideaScore(a))
 }
 
-function AddRow({ placeholder, onAdd, children }) {
+function AddRow({ placeholder, onAdd }) {
   const [value, setValue] = useState('')
 
   const submit = (event) => {
@@ -23,13 +23,14 @@ function AddRow({ placeholder, onAdd, children }) {
 
   return (
     <form className="mm-add-row" onSubmit={submit}>
-      {children}
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder={placeholder}
       />
-      <button type="submit" className="mm-btn mm-btn-solid">Add</button>
+      <div className="mm-add-row-actions">
+        <button type="submit" className="mm-btn mm-btn-solid">Add</button>
+      </div>
     </form>
   )
 }
@@ -378,16 +379,18 @@ function IdeaComposer({ onAdd }) {
         setText('')
       }}
     >
-      <select value={source} onChange={(e) => setSource(e.target.value)}>
-        <option value="scan">Scan</option>
-        <option value="own">Own</option>
-      </select>
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Drop an idea from a scan, Slack, or a voice memo"
       />
-      <button type="submit" className="mm-btn mm-btn-solid">Add</button>
+      <div className="mm-add-row-actions">
+        <select value={source} onChange={(e) => setSource(e.target.value)}>
+          <option value="scan">Scan</option>
+          <option value="own">Own</option>
+        </select>
+        <button type="submit" className="mm-btn mm-btn-solid">Add</button>
+      </div>
     </form>
   )
 }
