@@ -226,6 +226,10 @@
   line-height: 1.45;
 }
 
+.mm-lead {
+  margin-bottom: 0.75rem;
+}
+
 .mm-field,
 .mm-sliders {
   display: flex;
