@@ -19,6 +19,15 @@
   - 1-5 min: 1-3 minutes
   - 5-10 min: 3-5 minutes
 
+## Viral Radar
+- Watchlist is seeded with triathlon and advice accounts
+- Scan watchlist: ranks recent YouTube (and Instagram if cookies are available)
+- Scan + find new people: also searches YouTube for niche keywords
+- Add a creator with an Instagram URL, YouTube URL, or both
+- Deconstruct a ranked post to send it into shot analysis
+
+Instagram often requires a cookies file (`YTDLP_COOKIES`) because public profile listing is login-walled.
+
 ## Testing Locally
 Use the test script:
 ```bash

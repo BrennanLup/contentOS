@@ -4,7 +4,8 @@ import os
 import json
 import uuid
 import threading
-from video_processor import VideoProcessor
+from creator_store import CreatorStore
+from viral_scanner import ViralScanner
 
 app = Flask(__name__, static_folder=None)
 CORS(app)
@@ -12,12 +13,27 @@ CORS(app)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 RESULTS_FOLDER = os.path.join(BASE_DIR, 'results')
+DATA_FOLDER = os.environ.get('CONTENTOS_DATA_DIR') or os.path.join(BASE_DIR, 'data')
 FRONTEND_DIST = os.path.join(BASE_DIR, '..', 'frontend', 'dist')
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(RESULTS_FOLDER, exist_ok=True)
 
-processor = VideoProcessor(UPLOAD_FOLDER, RESULTS_FOLDER)
+creator_store = CreatorStore(
+    DATA_FOLDER,
+    seed_path=os.path.join(BASE_DIR, 'data', 'creators.seed.json'),
+)
+scanner = ViralScanner()
+latest_scan_path = os.path.join(DATA_FOLDER, 'latest_scan.json')
+_processor = None
+
+
+def get_processor():
+    global _processor
+    if _processor is None:
+        from video_processor import VideoProcessor
+        _processor = VideoProcessor(UPLOAD_FOLDER, RESULTS_FOLDER)
+    return _processor
 
 jobs = {}
 jobs_lock = threading.Lock()
@@ -40,9 +56,9 @@ def _get_job(job_id):
 def _process_url_job(job_id, url):
     try:
         _set_job(job_id, status='processing', step='downloading')
-        video_path = processor.download_video(url, job_id)
+        video_path = get_processor().download_video(url, job_id)
         _set_job(job_id, status='processing', step='analyzing')
-        result = processor.analyze_video(video_path, job_id)
+        result = get_processor().analyze_video(video_path, job_id)
         _set_job(job_id, status='done', step='complete', result=result)
     except Exception as e:
         _set_job(job_id, status='error', error=str(e))
@@ -51,7 +67,7 @@ def _process_url_job(job_id, url):
 def _process_upload_job(job_id, video_path):
     try:
         _set_job(job_id, status='processing', step='analyzing')
-        result = processor.analyze_video(video_path, job_id)
+        result = get_processor().analyze_video(video_path, job_id)
         _set_job(job_id, status='done', step='complete', result=result)
     except Exception as e:
         _set_job(job_id, status='error', error=str(e))
@@ -139,6 +155,111 @@ def get_results(job_id):
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/creators', methods=['GET'])
+def list_creators():
+    snapshot = creator_store.snapshot()
+    return jsonify(snapshot)
+
+
+@app.route('/api/creators', methods=['POST'])
+def add_creator():
+    try:
+        creator = creator_store.add_creator(request.json or {})
+        return jsonify(creator), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/creators/<creator_id>', methods=['PATCH'])
+def update_creator(creator_id):
+    try:
+        creator = creator_store.update_creator(creator_id, request.json or {})
+        return jsonify(creator)
+    except KeyError:
+        return jsonify({'error': 'Creator not found'}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@app.route('/api/creators/<creator_id>', methods=['DELETE'])
+def delete_creator(creator_id):
+    if not creator_store.delete_creator(creator_id):
+        return jsonify({'error': 'Creator not found'}), 404
+    return jsonify({'ok': True})
+
+
+def _apply_resolved_youtube(updates):
+    for update in updates or []:
+        creator_id = update.get('creator_id')
+        if not creator_id:
+            continue
+        try:
+            creator_store.update_creator(creator_id, {
+                'youtube_url': update.get('youtube_url'),
+                'youtube_handle': update.get('youtube_handle'),
+            })
+        except KeyError:
+            continue
+
+
+def _save_latest_scan(result):
+    payload = {k: v for k, v in result.items() if k != 'creator_results'}
+    with open(latest_scan_path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f)
+
+
+def _run_viral_scan(job_id, include_discovery, creator_ids, limit):
+    try:
+        snapshot = creator_store.snapshot()
+        creators = snapshot['creators']
+        if creator_ids:
+            wanted = set(creator_ids)
+            creators = [c for c in creators if c['id'] in wanted]
+        if not creators:
+            raise ValueError('No creators on the watchlist to scan')
+
+        def progress(info):
+            _set_job(job_id, status='processing', **info)
+
+        result = scanner.run_scan(
+            creators=creators,
+            niches=snapshot['niches'],
+            include_discovery=include_discovery,
+            limit=limit,
+            progress_cb=progress,
+        )
+        _apply_resolved_youtube(result.get('resolved_youtube'))
+        _save_latest_scan(result)
+        _set_job(job_id, status='done', step='complete', result=result)
+    except Exception as e:
+        _set_job(job_id, status='error', error=str(e))
+
+
+@app.route('/api/viral/scan', methods=['POST'])
+def start_viral_scan():
+    data = request.json or {}
+    job_id = str(uuid.uuid4())
+    include_discovery = data.get('include_discovery', True)
+    creator_ids = data.get('creator_ids')
+    limit = int(data.get('limit') or 12)
+    _set_job(job_id, kind='viral_scan', status='queued', step='queued')
+    thread = threading.Thread(
+        target=_run_viral_scan,
+        args=(job_id, include_discovery, creator_ids, limit),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify({'job_id': job_id, 'status': 'queued'})
+
+
+@app.route('/api/viral/latest', methods=['GET'])
+def latest_viral_scan():
+    if os.path.exists(latest_scan_path):
+        with open(latest_scan_path, 'r', encoding='utf-8') as f:
+            return jsonify(json.load(f))
+    return jsonify({'posts': [], 'suggestions': [], 'post_count': 0})
 
 
 @app.route('/api/thumbnail/<job_id>/<int:shot_index>', methods=['GET'])

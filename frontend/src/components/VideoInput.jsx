@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import axios from 'axios'
 import './VideoInput.css'
 
@@ -23,10 +23,16 @@ async function pollJob(jobId) {
   throw new Error('Processing timed out. Try a shorter video.')
 }
 
-function VideoInput({ onAnalysisComplete, onAnalysisStart, onError }) {
-  const [url, setUrl] = useState('')
+function VideoInput({ onAnalysisComplete, onAnalysisStart, onError, initialUrl = '' }) {
+  const [url, setUrl] = useState(initialUrl)
   const [dragActive, setDragActive] = useState(false)
   const fileInputRef = useRef(null)
+
+  useEffect(() => {
+    if (initialUrl) {
+      setUrl(initialUrl)
+    }
+  }, [initialUrl])
 
   const handleUrlSubmit = async (e) => {
     e.preventDefault()

@@ -1,0 +1,65 @@
+{
+  "niches": [
+    {
+      "id": "triathlon",
+      "name": "Triathlon",
+      "search_queries": [
+        "triathlon training shorts",
+        "ironman 70.3 vlog",
+        "age group triathlete day in the life",
+        "triathlon swim bike run"
+      ]
+    },
+    {
+      "id": "advice",
+      "name": "Advice",
+      "search_queries": [
+        "life advice high performance",
+        "career advice personal development shorts",
+        "habits of successful people"
+      ]
+    }
+  ],
+  "creators": [
+    {
+      "id": "malachi_triathlon",
+      "name": "Malachi Cashmore",
+      "niche": "Triathlon",
+      "instagram_handle": "malachi_triathlon",
+      "youtube_url": "https://www.youtube.com/channel/UCNoSoBcsDj-vogPcRcMwJYg",
+      "youtube_handle": null
+    },
+    {
+      "id": "noahanderson14",
+      "name": "Noah Anderson",
+      "niche": "Triathlon",
+      "instagram_handle": "noahanderson14",
+      "youtube_url": "https://www.youtube.com/@noahanderson14",
+      "youtube_handle": "noahanderson14"
+    },
+    {
+      "id": "nirvdoesfitness",
+      "name": "Nirv",
+      "niche": "Triathlon",
+      "instagram_handle": "nirvdoesfitness",
+      "youtube_url": null,
+      "youtube_handle": null
+    },
+    {
+      "id": "hannahsilberg",
+      "name": "Hannah Silberg",
+      "niche": "Triathlon",
+      "instagram_handle": "hannahsilberg",
+      "youtube_url": null,
+      "youtube_handle": null
+    },
+    {
+      "id": "sahilbloom",
+      "name": "Sahil Bloom",
+      "niche": "Advice",
+      "instagram_handle": "sahilbloom",
+      "youtube_url": "https://www.youtube.com/@Sahil_Bloom",
+      "youtube_handle": "Sahil_Bloom"
+    }
+  ]
+}
