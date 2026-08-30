@@ -311,7 +311,10 @@ class ViralScanner:
         for query in queries:
             found = self.search_youtube(query, creator.get('niche') or '', limit=8, source='watchlist')
             for post in found:
-                if _name_matches(post.get('creator_name'), creator.get('name')) or _name_matches(post.get('creator_handle'), handle):
+                channel_title = post.get('creator_name')
+                channel_handle = _channel_handle(post)
+                if _name_matches(channel_title, creator.get('name')) or _name_matches(channel_handle, handle):
+                    post['channel_title'] = channel_title
                     post['creator_id'] = creator.get('id')
                     post['creator_name'] = creator.get('name') or post.get('creator_name')
                     post['niche'] = creator.get('niche')
@@ -360,13 +363,16 @@ class ViralScanner:
 
         resolved_youtube = None
         if yt_posts and not creator.get('youtube_url'):
-            handle = creator.get('youtube_handle') or _channel_handle(yt_posts[0])
-            resolved_youtube = {
-                'youtube_url': yt_posts[0].get('channel_url') or (
-                    f'https://www.youtube.com/@{handle}' if handle else None
-                ),
-                'youtube_handle': handle,
-            }
+            sample = yt_posts[0]
+            channel_title = sample.get('channel_title') or sample.get('creator_name')
+            handle = creator.get('youtube_handle') or _channel_handle(sample)
+            if _name_matches(channel_title, creator.get('name')) or _name_matches(handle, creator.get('instagram_handle')):
+                resolved_youtube = {
+                    'youtube_url': sample.get('channel_url') or (
+                        f'https://www.youtube.com/@{handle}' if handle else None
+                    ),
+                    'youtube_handle': handle,
+                }
 
         return {
             'creator_id': creator.get('id'),

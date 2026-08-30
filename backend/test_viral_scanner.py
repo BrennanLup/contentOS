@@ -107,7 +107,30 @@ class ScannerTests(unittest.TestCase):
         self.assertTrue(post['is_short'])
         self.assertEqual(post['niche'], 'Triathlon')
 
-    def test_scan_and_discover_with_stubbed_extractor(self):
+    def test_search_does_not_attach_nirvana_to_nirv(self):
+        def fake_extract(url, limit):
+            if str(url).startswith('ytsearch'):
+                return {
+                    'entries': [{
+                        'id': 'nirvana1',
+                        'title': 'Nirvana - Dumb',
+                        'url': 'nirvana1',
+                        'view_count': 15_000_000,
+                        'channel': 'Nirvana',
+                        'channel_url': 'https://www.youtube.com/channel/UCFMZHIQMgBXTSxsr86Caazw',
+                        'uploader': 'Nirvana',
+                    }]
+                }
+            return {'entries': []}
+
+        scanner = ViralScanner(extract_fn=fake_extract, max_workers=1)
+        posts, _ = scanner._search_creator_youtube({
+            'id': 'nirvdoesfitness',
+            'name': 'Nirv',
+            'niche': 'Triathlon',
+            'instagram_handle': 'nirvdoesfitness',
+        })
+        self.assertEqual(posts, [])
         creators = [
             {
                 'id': 'sahilbloom',
