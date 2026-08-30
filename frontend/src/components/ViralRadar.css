@@ -272,7 +272,9 @@
 
 .youtube-attach {
   display: flex;
-  gap: 0.4rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.35rem;
   margin-top: 0.45rem;
 }
 
@@ -284,6 +286,7 @@
 
 .youtube-attach button {
   width: auto;
+  align-self: flex-start;
   margin-top: 0;
 }
 

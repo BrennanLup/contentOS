@@ -92,7 +92,13 @@ def _name_matches(left: Optional[str], right: Optional[str]) -> bool:
     b = re.sub(r'[^a-z0-9]+', '', right.lower())
     if not a or not b:
         return False
-    return a in b or b in a
+    if a == b:
+        return True
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    # Avoid "Nirv" matching "Nirvana". Require a substantial contained name.
+    if len(shorter) < 6:
+        return False
+    return shorter in longer
 
 
 def _host(url: str) -> str:
@@ -292,13 +298,14 @@ class ViralScanner:
 
     def _search_creator_youtube(self, creator: dict, limit: int = 12) -> tuple[list[dict], Optional[str]]:
         queries = []
-        if creator.get('name'):
-            queries.append(creator['name'])
+        name = (creator.get('name') or '').strip()
+        if len(name) >= 5:
+            queries.append(name)
         handle = creator.get('youtube_handle') or creator.get('instagram_handle')
-        if handle:
+        if handle and len(handle) >= 5:
             queries.append(handle.replace('_', ' '))
-        if creator.get('name') and creator.get('niche'):
-            queries.append(f"{creator['name']} {creator['niche']}")
+        if name and creator.get('niche') and len(name) >= 5:
+            queries.append(f"{name} {creator['niche']}")
 
         posts = []
         for query in queries:

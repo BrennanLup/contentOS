@@ -82,6 +82,13 @@ class ScoringTests(unittest.TestCase):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_name_match_does_not_confuse_nirv_with_nirvana(self):
+        from viral_scanner import _name_matches
+        self.assertFalse(_name_matches('Nirvana', 'Nirv'))
+        self.assertFalse(_name_matches('Nirv', 'Nirvana'))
+        self.assertTrue(_name_matches('Sahil Bloom', 'Sahil Bloom'))
+        self.assertTrue(_name_matches('Malachi Cashmore | Pro Triathlete', 'Malachi Cashmore'))
+
     def test_normalize_youtube_watch_url(self):
         post = normalize_entry(
             {

@@ -65,7 +65,7 @@ function YoutubeAttach({ creatorId, onLinked, onError }) {
       <input
         value={value}
         onChange={(e) => setValue(e.target.value)}
-        placeholder="Paste YouTube URL"
+        placeholder="YouTube URL"
       />
       <button type="submit" className="btn-ghost" disabled={saving}>
         Link
