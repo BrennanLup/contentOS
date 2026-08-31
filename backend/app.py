@@ -106,9 +106,16 @@ def slack_webhook():
         return jsonify({'error': reason}), 401
 
     payload = request.get_json(silent=True)
+    if payload is None and request.form.get('payload'):
+        try:
+            payload = json.loads(request.form['payload'])
+        except (TypeError, ValueError):
+            payload = None
     if not isinstance(payload, dict):
         return jsonify({'error': 'invalid JSON body'}), 400
 
+    if payload.get('type') in ('block_actions', 'view_submission'):
+        return jsonify(zernio_slack.handle_slack_interaction(payload))
     return jsonify(zernio_slack.handle_slack_event(payload))
 
 

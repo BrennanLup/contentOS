@@ -1,7 +1,8 @@
 """Zernio -> Slack notifications.
 
 Receives Zernio inbox webhooks (new comments on posts, new DMs) and forwards
-them to a Slack channel via a Slack incoming webhook.
+them to a Slack channel. Bot notifications include an editable reply modal;
+the incoming webhook remains a notify-only fallback.
 
 Environment variables:
   ZERNIO_API_KEY         Zernio API key (sk_...). Used to auto-register the
@@ -11,11 +12,15 @@ Environment variables:
                          endpoint is accepted.
   SLACK_BOT_TOKEN        Slack bot token (xoxb-...). Enables reply-from-Slack:
                          notifications are posted by the bot with metadata,
-                         and thread replies are sent back through Zernio.
-  SLACK_CHANNEL_ID       Channel the bot posts to (C...). Required with the
-                         bot token.
+                         and a button opens an editable reply modal.
+  INSTAGRAM_SLACK_CHANNEL_ID
+                         Channel the bot posts to (C...). SLACK_CHANNEL_ID is
+                         also supported as a generic override.
   SLACK_SIGNING_SECRET   Verifies that events on /api/webhooks/slack really
                          come from Slack.
+  CLAUDE_API_KEY         Optional. Generates contextual draft replies using
+                         Claude. Without it, the modal uses a safe generic
+                         draft that can still be edited before sending.
   SLACK_WEBHOOK_URL      Legacy fallback: incoming webhook URL. Used only
                          when the bot token/channel are not set (notify-only,
                          no replies).
@@ -25,6 +30,7 @@ Environment variables:
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import threading
@@ -96,7 +102,7 @@ def _truncate(text, limit=280):
     return text
 
 
-def _format_comment(payload):
+def _format_comment(payload, draft):
     comment = payload.get('comment') or {}
     post = payload.get('post') or {}
     account = payload.get('account') or {}
@@ -123,7 +129,7 @@ def _format_comment(payload):
     if account.get('username'):
         context_bits.append(f'Account: @{account["username"]}')
     if _bot_mode_enabled():
-        context_bits.append('Reply in this thread to answer publicly')
+        context_bits.append('Review the draft before sending')
 
     blocks = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(lines)}}]
     if context_bits:
@@ -131,20 +137,37 @@ def _format_comment(payload):
             'type': 'context',
             'elements': [{'type': 'mrkdwn', 'text': ' · '.join(context_bits)}],
         })
+    metadata = {
+        'kind': 'comment',
+        'account_id': account.get('id') or account.get('accountId'),
+        'platform_post_id': comment.get('platformPostId'),
+        'comment_id': comment.get('id'),
+    }
+    if _bot_mode_enabled():
+        blocks.append({
+            'type': 'actions',
+            'elements': [{
+                'type': 'button',
+                'action_id': 'zernio_review_reply',
+                'text': {'type': 'plain_text', 'text': 'Review & reply'},
+                'style': 'primary',
+                'value': _reply_action_value(
+                    metadata,
+                    draft,
+                    text,
+                    f'{kind} from {who} on {platform}',
+                ),
+            }],
+        })
     fallback = f'{kind} on {platform} from {who}: {text}'
     return {
         'text': fallback,
         'blocks': blocks,
-        'metadata': {
-            'kind': 'comment',
-            'account_id': account.get('id') or account.get('accountId'),
-            'platform_post_id': comment.get('platformPostId'),
-            'comment_id': comment.get('id'),
-        },
+        'metadata': metadata,
     }
 
 
-def _format_message(payload):
+def _format_message(payload, draft):
     message = payload.get('message') or {}
     conversation = payload.get('conversation') or {}
     account = payload.get('account') or {}
@@ -175,7 +198,7 @@ def _format_message(payload):
     if account.get('username'):
         context_bits.append(f'Account: @{account["username"]}')
     if _bot_mode_enabled():
-        context_bits.append('Reply in this thread to answer the DM')
+        context_bits.append('Review the draft before sending')
     else:
         context_bits.append('Reply from the Zernio inbox')
 
@@ -184,20 +207,117 @@ def _format_message(payload):
         'type': 'context',
         'elements': [{'type': 'mrkdwn', 'text': ' · '.join(context_bits)}],
     })
+    metadata = {
+        'kind': 'dm',
+        'account_id': account.get('id') or account.get('accountId'),
+        'conversation_id': conversation.get('id'),
+    }
+    if _bot_mode_enabled():
+        blocks.append({
+            'type': 'actions',
+            'elements': [{
+                'type': 'button',
+                'action_id': 'zernio_review_reply',
+                'text': {'type': 'plain_text', 'text': 'Review & reply'},
+                'style': 'primary',
+                'value': _reply_action_value(
+                    metadata,
+                    draft,
+                    text or '(attachment)',
+                    f'DM from {who} on {platform}',
+                ),
+            }],
+        })
     fallback = f'New DM on {platform} from {who}: {text or "(attachment)"}'
     return {
         'text': fallback,
         'blocks': blocks,
-        'metadata': {
-            'kind': 'dm',
-            'account_id': account.get('id') or account.get('accountId'),
-            'conversation_id': conversation.get('id'),
-        },
+        'metadata': metadata,
     }
 
 
+def _slack_channel_id():
+    return os.environ.get('SLACK_CHANNEL_ID') or os.environ.get('INSTAGRAM_SLACK_CHANNEL_ID')
+
+
 def _bot_mode_enabled():
-    return bool(os.environ.get('SLACK_BOT_TOKEN') and os.environ.get('SLACK_CHANNEL_ID'))
+    return bool(os.environ.get('SLACK_BOT_TOKEN') and _slack_channel_id())
+
+
+def _reply_action_value(metadata, draft, incoming, title):
+    value = {
+        **metadata,
+        'draft': _truncate(draft, 600),
+        'incoming': _truncate(incoming, 500),
+        'title': _truncate(title, 120),
+    }
+    return json.dumps(value, separators=(',', ':'))
+
+
+def _fallback_draft(kind):
+    if kind == 'comment':
+        return 'Thanks for the comment!'
+    return 'Thanks for reaching out!'
+
+
+def _generate_draft(payload, kind):
+    """Generate a short draft reply with Claude, or return a safe fallback."""
+    api_key = os.environ.get('CLAUDE_API_KEY') or os.environ.get('ANTHROPIC_API_KEY')
+    if not api_key:
+        return _fallback_draft(kind)
+
+    if kind == 'comment':
+        item = payload.get('comment') or {}
+        post = payload.get('post') or {}
+        author = item.get('author') or {}
+        incoming = item.get('text') or ''
+        sender = author.get('username') or author.get('name') or 'the commenter'
+        context = f'Post: {post.get("content") or "(content unavailable)"}'
+        channel = 'public social media comment'
+    else:
+        item = payload.get('message') or {}
+        conversation = payload.get('conversation') or {}
+        incoming = item.get('text') or '(attachment only)'
+        sender_data = item.get('sender') or {}
+        sender = (
+            sender_data.get('username')
+            or sender_data.get('name')
+            or conversation.get('participantName')
+            or 'the sender'
+        )
+        context = 'This is a private direct message.'
+        channel = 'direct message'
+
+    prompt = (
+        'Write one concise, natural reply in Brennan’s voice. '
+        'Be warm and conversational, not corporate. Do not use hashtags. '
+        'Do not invent facts, commitments, links, prices, or availability. '
+        'If context is insufficient, acknowledge the message without guessing. '
+        'Return only the reply text, with no quotation marks or explanation.\n\n'
+        f'Channel: {channel}\nFrom: {sender}\n{context}\nIncoming: {incoming}'
+    )
+    try:
+        resp = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01',
+                'content-type': 'application/json',
+            },
+            json={
+                'model': os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-6'),
+                'max_tokens': 180,
+                'messages': [{'role': 'user', 'content': prompt}],
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        content = resp.json().get('content') or []
+        draft = next((part.get('text', '').strip() for part in content if part.get('type') == 'text'), '')
+        return _truncate(draft, 600) or _fallback_draft(kind)
+    except (requests.RequestException, ValueError, KeyError):
+        logger.exception('Failed to generate reply draft; using fallback')
+        return _fallback_draft(kind)
 
 
 def _slack_api(method, payload):
@@ -221,7 +341,7 @@ def _send_to_slack(slack_payload):
 
     if _bot_mode_enabled():
         body = {
-            'channel': os.environ.get('SLACK_CHANNEL_ID'),
+            'channel': _slack_channel_id(),
             'text': slack_payload['text'],
             'unfurl_links': False,
         }
@@ -247,6 +367,18 @@ def _send_to_slack(slack_payload):
         logger.exception('Failed to post to Slack')
 
 
+def _build_and_send_notification(payload):
+    event = payload.get('event')
+    if event == 'comment.received':
+        slack_payload = _format_comment(payload, _generate_draft(payload, 'comment'))
+    elif event == 'message.received':
+        slack_payload = _format_message(payload, _generate_draft(payload, 'dm'))
+    else:
+        return
+    if slack_payload is not None:
+        _send_to_slack(slack_payload)
+
+
 def handle_event(payload):
     """Process a verified Zernio webhook payload. Returns a short status string."""
     event = payload.get('event')
@@ -258,19 +390,17 @@ def handle_event(payload):
     if _already_seen(payload.get('id')):
         return 'duplicate ignored'
 
-    if event == 'comment.received':
-        slack_payload = _format_comment(payload)
-    elif event == 'message.received':
-        slack_payload = _format_message(payload)
-    else:
+    if event not in ('comment.received', 'message.received'):
         return f'ignored event {event}'
 
-    if slack_payload is None:
+    if event == 'comment.received' and ((payload.get('comment') or {}).get('author') or {}).get('isOwnAccount'):
+        return 'skipped (own/outgoing activity)'
+    if event == 'message.received' and (payload.get('message') or {}).get('direction') == 'outgoing':
         return 'skipped (own/outgoing activity)'
 
-    # Post from a thread so the webhook is acknowledged well inside Zernio's
-    # 5-second delivery timeout.
-    threading.Thread(target=_send_to_slack, args=(slack_payload,), daemon=True).start()
+    # Draft generation can take several seconds. Do it after acknowledging
+    # Zernio's webhook so its 5-second delivery timeout is never hit.
+    threading.Thread(target=_build_and_send_notification, args=(payload,), daemon=True).start()
     return 'notified'
 
 
@@ -337,69 +467,112 @@ def _send_zernio_reply(meta, text):
     return True, 'sent'
 
 
-def _process_slack_reply(event):
-    channel = event.get('channel')
-    thread_ts = event.get('thread_ts')
-    reply_ts = event.get('ts')
-    try:
-        # Fetch the parent notification to read the Zernio IDs off its metadata.
-        token = os.environ.get('SLACK_BOT_TOKEN')
-        resp = requests.get(
-            'https://slack.com/api/conversations.replies',
-            params={'channel': channel, 'ts': thread_ts, 'limit': 1, 'include_all_metadata': 'true'},
-            headers={'Authorization': f'Bearer {token}'},
-            timeout=10,
+def _reply_modal(action_data, channel_id, message_ts):
+    metadata = {
+        key: action_data.get(key)
+        for key in ('kind', 'account_id', 'platform_post_id', 'comment_id', 'conversation_id')
+    }
+    metadata.update({'channel_id': channel_id, 'message_ts': message_ts})
+    return {
+        'type': 'modal',
+        'callback_id': 'zernio_reply_modal',
+        'private_metadata': json.dumps(metadata, separators=(',', ':')),
+        'title': {'type': 'plain_text', 'text': 'Review reply'},
+        'submit': {'type': 'plain_text', 'text': 'Send reply'},
+        'close': {'type': 'plain_text', 'text': 'Cancel'},
+        'blocks': [
+            {
+                'type': 'section',
+                'text': {
+                    'type': 'mrkdwn',
+                    'text': f'*{action_data.get("title") or "Incoming message"}*\n>{_truncate(action_data.get("incoming"), 500)}',
+                },
+            },
+            {
+                'type': 'input',
+                'block_id': 'reply_block',
+                'label': {'type': 'plain_text', 'text': 'Reply'},
+                'element': {
+                    'type': 'plain_text_input',
+                    'action_id': 'reply_input',
+                    'multiline': True,
+                    'initial_value': action_data.get('draft') or '',
+                    'focus_on_load': True,
+                },
+            },
+        ],
+    }
+
+
+def _finish_modal_reply(meta, text):
+    ok, detail = _send_zernio_reply(meta, text)
+    channel = meta.get('channel_id')
+    message_ts = meta.get('message_ts')
+    if ok:
+        _slack_api('chat.postMessage', {
+            'channel': channel,
+            'thread_ts': message_ts,
+            'text': f':white_check_mark: Reply sent:\n>{text}',
+        })
+    else:
+        logger.error('Zernio reply failed: %s', detail)
+        _slack_api('chat.postMessage', {
+            'channel': channel,
+            'thread_ts': message_ts,
+            'text': f':x: Could not send the reply: {detail}',
+        })
+
+
+def handle_slack_interaction(payload):
+    """Open the review modal and handle its explicit send submission."""
+    payload_type = payload.get('type')
+    if payload_type == 'block_actions':
+        action = (payload.get('actions') or [{}])[0]
+        if action.get('action_id') != 'zernio_review_reply':
+            return {'status': 'ignored'}
+        try:
+            action_data = json.loads(action.get('value') or '{}')
+        except ValueError:
+            return {'status': 'invalid action data'}
+        channel_id = (payload.get('channel') or {}).get('id')
+        message_ts = (payload.get('container') or {}).get('message_ts')
+        result = _slack_api('views.open', {
+            'trigger_id': payload.get('trigger_id'),
+            'view': _reply_modal(action_data, channel_id, message_ts),
+        })
+        return {'status': 'opened' if result.get('ok') else f"error: {result.get('error')}"}
+
+    if payload_type == 'view_submission':
+        view = payload.get('view') or {}
+        if view.get('callback_id') != 'zernio_reply_modal':
+            return {'status': 'ignored'}
+        try:
+            meta = json.loads(view.get('private_metadata') or '{}')
+        except ValueError:
+            return {
+                'response_action': 'errors',
+                'errors': {'reply_block': 'Reply context is invalid. Close this modal and try again.'},
+            }
+        text = (
+            ((view.get('state') or {}).get('values') or {})
+            .get('reply_block', {})
+            .get('reply_input', {})
+            .get('value', '')
+            .strip()
         )
-        data = resp.json()
-        if not data.get('ok'):
-            logger.error('conversations.replies failed: %s', data.get('error'))
-            return
-        parent = (data.get('messages') or [{}])[0]
-        meta_wrapper = parent.get('metadata') or {}
-        if meta_wrapper.get('event_type') != 'zernio_notification':
-            return  # a thread on some unrelated message; not ours to handle
-
-        meta = meta_wrapper.get('event_payload') or {}
-        text = _unescape_slack((event.get('text') or '').strip())
         if not text:
-            _slack_api('chat.postMessage', {
-                'channel': channel, 'thread_ts': thread_ts,
-                'text': ':x: Empty reply — nothing was sent.',
-            })
-            return
+            return {'response_action': 'errors', 'errors': {'reply_block': 'Enter a reply before sending.'}}
+        threading.Thread(target=_finish_modal_reply, args=(meta, text), daemon=True).start()
+        return {'response_action': 'clear'}
 
-        ok, detail = _send_zernio_reply(meta, text)
-        if ok:
-            _slack_api('reactions.add', {'channel': channel, 'name': 'white_check_mark', 'timestamp': reply_ts})
-        else:
-            logger.error('Zernio reply failed: %s', detail)
-            _slack_api('chat.postMessage', {
-                'channel': channel, 'thread_ts': thread_ts,
-                'text': f':x: Could not send the reply: {detail}',
-            })
-    except requests.RequestException:
-        logger.exception('Failed processing Slack reply')
+    return {'status': 'ignored'}
 
 
 def handle_slack_event(payload):
-    """Handle a verified Slack Events API request. Returns a JSON-able dict."""
+    """Handle Slack Events API requests without auto-sending thread replies."""
     if payload.get('type') == 'url_verification':
         return {'challenge': payload.get('challenge')}
-    if payload.get('type') != 'event_callback':
-        return {'status': 'ignored'}
-    if _already_seen('slack:' + (payload.get('event_id') or '')):
-        return {'status': 'duplicate ignored'}
-
-    event = payload.get('event') or {}
-    if event.get('type') != 'message' or event.get('bot_id') or event.get('subtype'):
-        return {'status': 'ignored'}
-    thread_ts = event.get('thread_ts')
-    if not thread_ts or thread_ts == event.get('ts'):
-        return {'status': 'not a thread reply'}
-
-    # Ack fast (Slack retries after 3s); do the Zernio call in the background.
-    threading.Thread(target=_process_slack_reply, args=(event,), daemon=True).start()
-    return {'status': 'processing'}
+    return {'status': 'ignored'}
 
 
 def _public_webhook_url():
@@ -482,9 +655,17 @@ def diagnostics(send_test=False):
         'webhook_secret_set': bool(os.environ.get('ZERNIO_WEBHOOK_SECRET')),
         'slack_webhook_url_set': bool(os.environ.get('SLACK_WEBHOOK_URL')),
         'slack_bot_token_set': bool(os.environ.get('SLACK_BOT_TOKEN')),
-        'slack_channel_id_set': bool(os.environ.get('SLACK_CHANNEL_ID')),
+        'slack_channel_id_set': bool(_slack_channel_id()),
+        'slack_channel_source': (
+            'SLACK_CHANNEL_ID'
+            if os.environ.get('SLACK_CHANNEL_ID')
+            else 'INSTAGRAM_SLACK_CHANNEL_ID'
+            if os.environ.get('INSTAGRAM_SLACK_CHANNEL_ID')
+            else None
+        ),
         'slack_signing_secret_set': bool(os.environ.get('SLACK_SIGNING_SECRET')),
         'reply_from_slack_enabled': _bot_mode_enabled(),
+        'ai_drafts_enabled': bool(os.environ.get('CLAUDE_API_KEY') or os.environ.get('ANTHROPIC_API_KEY')),
         'expected_webhook_url': _public_webhook_url(),
     }
 
