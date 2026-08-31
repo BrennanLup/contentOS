@@ -154,8 +154,27 @@ class NotionContentStore:
         self._title_property = title
         return self._schema
 
+    def _property_name(self, logical):
+        schema = self._schema or {}
+        if logical in schema:
+            return logical
+        target = logical.lower()
+        for name in schema:
+            if name.lower() == target:
+                return name
+        return logical
+
     def ensure_schema(self):
         schema = self.get_schema(refresh=True)
+        stage_actual = self._property_name('Stage')
+        if stage_actual != 'Stage' and stage_actual in schema:
+            self._request(
+                'PATCH',
+                f'/data_sources/{self.resolve_data_source()}',
+                json={'properties': {stage_actual: {'name': 'Stage'}}},
+            )
+            schema = self.get_schema(refresh=True)
+
         missing = {
             name: definition
             for name, definition in PROPERTY_DEFINITIONS.items()
@@ -217,7 +236,8 @@ class NotionContentStore:
         }
 
     def _extract_property(self, props, name):
-        prop = props.get(name) or {}
+        actual = self._property_name(name)
+        prop = props.get(actual) or props.get(name) or {}
         prop_type = prop.get('type')
         value = prop.get(prop_type) if prop_type else None
         if prop_type in ('title', 'rich_text'):
@@ -298,7 +318,8 @@ class NotionContentStore:
 
     def _stage_property(self, stage_id):
         schema = self.get_schema()
-        prop_type = (schema.get('Stage') or {}).get('type', 'select')
+        actual = self._property_name('Stage')
+        prop_type = (schema.get(actual) or schema.get('Stage') or {}).get('type', 'select')
         return {prop_type: {'name': ID_TO_STAGE[stage_id]}}
 
     def _properties_for(self, data, creating=False):
@@ -308,18 +329,18 @@ class NotionContentStore:
         if 'stage' in data:
             if data['stage'] not in ID_TO_STAGE:
                 raise NotionError(f'Invalid stage: {data["stage"]}', 400)
-            properties['Stage'] = self._stage_property(data['stage'])
+            properties[self._property_name('Stage')] = self._stage_property(data['stage'])
         for field, notion_name in (('impact', 'Impact'), ('effort', 'Effort')):
             if field in data:
                 value = int(data[field])
                 if value < 1 or value > 5:
                     raise NotionError(f'{field} must be between 1 and 5', 400)
-                properties[notion_name] = {'number': value}
+                properties[self._property_name(notion_name)] = {'number': value}
         for field, notion_name in (('dueDate', 'Due Date'), ('publishDate', 'Publish Date')):
             if field in data:
-                properties[notion_name] = {'date': {'start': data[field]} if data[field] else None}
+                properties[self._property_name(notion_name)] = {'date': {'start': data[field]} if data[field] else None}
         if 'liveUrl' in data:
-            properties['Live URL'] = {'url': data['liveUrl'] or None}
+            properties[self._property_name('Live URL')] = {'url': data['liveUrl'] or None}
         for field, notion_name in (
             ('draft', 'Draft'),
             ('hook', 'Hook'),
@@ -328,9 +349,9 @@ class NotionContentStore:
             ('learning', 'Learning'),
         ):
             if field in data:
-                properties[notion_name] = {'rich_text': _rich_text(str(data[field]))}
+                properties[self._property_name(notion_name)] = {'rich_text': _rich_text(str(data[field]))}
         if creating:
-            properties['contentOS ID'] = {
+            properties[self._property_name('contentOS ID')] = {
                 'rich_text': _rich_text(data.get('contentosId') or str(uuid.uuid4()))
             }
         return properties
