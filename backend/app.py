@@ -5,6 +5,7 @@ import json
 import uuid
 import threading
 from creator_store import CreatorStore
+from notion_sync import NotionContentStore, NotionError
 from viral_scanner import ViralScanner
 import zernio_slack
 
@@ -25,6 +26,7 @@ creator_store = CreatorStore(
     seed_path=os.path.join(BASE_DIR, 'data', 'creators.seed.json'),
 )
 scanner = ViralScanner()
+notion_store = NotionContentStore()
 latest_scan_path = os.path.join(DATA_FOLDER, 'latest_scan.json')
 _processor = None
 
@@ -124,6 +126,37 @@ def zernio_integration_status():
     """Integration health check. Add ?test=1 to also send a Slack test message."""
     send_test = request.args.get('test') == '1'
     return jsonify(zernio_slack.diagnostics(send_test=send_test))
+
+
+@app.route('/api/integrations/notion/status', methods=['GET'])
+def notion_integration_status():
+    return jsonify(notion_store.status(ensure=request.args.get('ensure') == '1'))
+
+
+@app.route('/api/content', methods=['GET'])
+def list_content():
+    try:
+        return jsonify({'items': notion_store.list_content()})
+    except NotionError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+
+
+@app.route('/api/content', methods=['POST'])
+def create_content():
+    try:
+        item, created = notion_store.create_content(request.get_json(silent=True) or {})
+        return jsonify({'item': item, 'created': created}), 201 if created else 200
+    except NotionError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+
+
+@app.route('/api/content/<page_id>', methods=['PATCH'])
+def update_content(page_id):
+    try:
+        item = notion_store.update_content(page_id, request.get_json(silent=True) or {})
+        return jsonify({'item': item})
+    except NotionError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
 
 
 # Register the Zernio webhook subscription (no-op unless ZERNIO_API_KEY and a

@@ -9,11 +9,9 @@ import { useProcessStore } from './hooks/useProcessStore'
 import { PIPELINE_STAGES } from './data/contentProcess'
 
 function stageCountsFrom(ideas) {
-  const counts = {
-    'idea-selection': ideas.filter((idea) => (idea.decision || 'pending') === 'pending').length,
-  }
-  for (const stageId of PIPELINE_STAGES) {
-    counts[stageId] = ideas.filter((idea) => idea.decision === 'approved' && idea.stage === stageId).length
+  const counts = {}
+  for (const stageId of ['idea-generation', 'idea-selection', ...PIPELINE_STAGES]) {
+    counts[stageId] = ideas.filter((idea) => idea.stage === stageId).length
   }
   return counts
 }
