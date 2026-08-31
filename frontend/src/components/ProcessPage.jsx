@@ -177,7 +177,7 @@ function IdeaGeneration({ store }) {
 
 function ScorePicker({ label, value, onChange }) {
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex shrink-0 items-center gap-1.5">
       <span className="w-10 text-2xs uppercase tracking-wide text-muted-foreground">{label}</span>
       <div className="flex gap-0.5">
         {[1, 2, 3, 4, 5].map((step) => (
@@ -241,7 +241,9 @@ function IdeaSelection({ store }) {
   const pending = store.state.ideas.filter((idea) => idea.stage === 'idea-selection')
   const denied = store.state.ideas.filter((idea) => idea.stage === 'denied')
   const [ordered, resort] = useStableOrder(pending)
-  const topScore = pending.length ? Math.max(...pending.map(ideaScore)) : 0
+  const scores = pending.map(ideaScore)
+  // Only flag a leader when the scores actually differ, otherwise every row highlights.
+  const topScore = new Set(scores).size > 1 ? Math.max(...scores) : null
 
   return (
     <div className="flex flex-col gap-6">
@@ -269,9 +271,7 @@ function IdeaSelection({ store }) {
                   score === topScore && 'border-brand/60',
                 )}
               >
-                <p className="min-w-0 flex-1 truncate text-sm" title={idea.text}>
-                  {idea.text}
-                </p>
+                <p className="min-w-[14rem] flex-1 break-words text-sm">{idea.text}</p>
 
                 <ScorePicker
                   label="Impact"
@@ -284,9 +284,11 @@ function IdeaSelection({ store }) {
                   onChange={(value) => store.updateIdea(idea.id, { effort: value })}
                 />
 
-                <span className="w-9 text-right text-2xs font-semibold text-brand">{score.toFixed(2)}</span>
+                <span className="w-9 shrink-0 text-right text-2xs font-semibold text-brand">
+                  {score.toFixed(2)}
+                </span>
 
-                <div className="flex items-center gap-1">
+                <div className="flex shrink-0 items-center gap-1">
                   {idea.notionUrl ? (
                     <a
                       href={idea.notionUrl}
@@ -330,12 +332,10 @@ function IdeaSelection({ store }) {
                 key={idea.id}
                 className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2"
               >
-                <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={idea.text}>
-                  {idea.text}
-                </p>
+                <p className="min-w-0 flex-1 break-words text-sm text-muted-foreground">{idea.text}</p>
                 <button
                   type="button"
-                  className="button-secondary px-2 py-1 text-xs"
+                  className="button-secondary shrink-0 px-2 py-1 text-xs"
                   onClick={() => store.setIdeaDecision(idea.id, 'denied')}
                 >
                   Return to queue
