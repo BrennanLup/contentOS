@@ -414,6 +414,10 @@ class NotionContentStore:
         )
         return self.normalize_page(page)
 
+    def archive_content(self, page_id):
+        self._request('PATCH', f'/pages/{page_id}', json={'archived': True, 'in_trash': True})
+        return {'id': page_id, 'archived': True}
+
     def status(self, ensure=False):
         result = {
             'configured': self.configured,

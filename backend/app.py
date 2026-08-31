@@ -159,6 +159,14 @@ def update_content(page_id):
         return jsonify({'error': str(exc)}), exc.status_code
 
 
+@app.route('/api/content/<page_id>', methods=['DELETE'])
+def archive_content(page_id):
+    try:
+        return jsonify(notion_store.archive_content(page_id))
+    except NotionError as exc:
+        return jsonify({'error': str(exc)}), exc.status_code
+
+
 # Register the Zernio webhook subscription (no-op unless ZERNIO_API_KEY and a
 # public URL are configured). Runs in a background thread so boot isn't blocked.
 zernio_slack.start_registration_thread()
