@@ -94,6 +94,13 @@ def zernio_webhook():
     return jsonify({'status': status})
 
 
+@app.route('/api/integrations/zernio/status', methods=['GET'])
+def zernio_integration_status():
+    """Integration health check. Add ?test=1 to also send a Slack test message."""
+    send_test = request.args.get('test') == '1'
+    return jsonify(zernio_slack.diagnostics(send_test=send_test))
+
+
 # Register the Zernio webhook subscription (no-op unless ZERNIO_API_KEY and a
 # public URL are configured). Runs in a background thread so boot isn't blocked.
 zernio_slack.start_registration_thread()
