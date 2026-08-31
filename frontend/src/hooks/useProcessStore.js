@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { WEEKLY_GOAL_START } from '../data/contentProcess'
+import { PIPELINE_STAGES, SEED_IDEAS, WEEKLY_GOAL_START } from '../data/contentProcess'
 
 const STORAGE_KEY = 'contentos-process-v1'
 
@@ -12,29 +12,36 @@ function weekKey(date = new Date()) {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
 }
 
+function normalizeIdea(idea) {
+  const decision = idea.decision === 'approved' || idea.decision === 'denied' ? idea.decision : 'pending'
+  return {
+    ...idea,
+    decision,
+    stage: idea.stage ?? (decision === 'approved' ? PIPELINE_STAGES[0] : null),
+    data: idea.data || {},
+  }
+}
+
+function seedIdeas() {
+  const now = new Date().toISOString()
+  return SEED_IDEAS.map((idea) =>
+    normalizeIdea({
+      ...idea,
+      createdAt: idea.createdAt || now,
+    })
+  )
+}
+
+function withSeedIdeas(ideas) {
+  const existing = Array.isArray(ideas) ? ideas.map(normalizeIdea) : []
+  const missing = seedIdeas().filter((seed) => !existing.some((idea) => idea.id === seed.id || idea.text === seed.text))
+  return [...missing, ...existing]
+}
+
 function emptyState() {
   return {
     currentStage: 'idea-generation',
-    completedStages: [],
-    skippedStages: [],
-    ideas: [],
-    checklists: {},
-    emotions: {
-      willFeel: '',
-      wantThemToFeel: '',
-      doTheyFeelIt: '',
-    },
-    shotList: '',
-    filmer: '',
-    editor: '',
-    thumbnailDone: false,
-    reviews: [
-      { name: '', emotionFelt: false, blockers: '', tips: '' },
-      { name: '', emotionFelt: false, blockers: '', tips: '' },
-    ],
-    releaseDate: '',
-    released: false,
-    commentsDone: false,
+    ideas: seedIdeas(),
     learnings: [],
     weeklyCounts: {},
     weeklyGoal: WEEKLY_GOAL_START,
@@ -45,7 +52,8 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
     if (!raw) return emptyState()
-    return { ...emptyState(), ...JSON.parse(raw) }
+    const parsed = JSON.parse(raw)
+    return { ...emptyState(), ...parsed, ideas: withSeedIdeas(parsed.ideas) }
   } catch {
     return emptyState()
   }
@@ -67,32 +75,6 @@ export function useProcessStore() {
     setState((prev) => ({ ...prev, currentStage: id }))
   }, [])
 
-  const toggleComplete = useCallback((id) => {
-    setState((prev) => {
-      const done = prev.completedStages.includes(id)
-      return {
-        ...prev,
-        completedStages: done
-          ? prev.completedStages.filter((s) => s !== id)
-          : [...prev.completedStages, id],
-        skippedStages: prev.skippedStages.filter((s) => s !== id),
-      }
-    })
-  }, [])
-
-  const toggleSkipped = useCallback((id) => {
-    setState((prev) => {
-      const skipped = prev.skippedStages.includes(id)
-      return {
-        ...prev,
-        skippedStages: skipped
-          ? prev.skippedStages.filter((s) => s !== id)
-          : [...prev.skippedStages, id],
-        completedStages: prev.completedStages.filter((s) => s !== id),
-      }
-    })
-  }, [])
-
   const addIdea = useCallback((text, source) => {
     const trimmed = text.trim()
     if (!trimmed) return
@@ -105,6 +87,9 @@ export function useProcessStore() {
           source,
           impact: 3,
           effort: 3,
+          decision: 'pending',
+          stage: null,
+          data: {},
           createdAt: new Date().toISOString(),
         },
         ...prev.ideas,
@@ -119,6 +104,56 @@ export function useProcessStore() {
     }))
   }, [])
 
+  const updateIdeaData = useCallback((id, partial) => {
+    setState((prev) => ({
+      ...prev,
+      ideas: prev.ideas.map((idea) =>
+        idea.id === id ? { ...idea, data: { ...idea.data, ...partial } } : idea
+      ),
+    }))
+  }, [])
+
+  const setIdeaDecision = useCallback((id, decision) => {
+    setState((prev) => ({
+      ...prev,
+      ideas: prev.ideas.map((idea) => {
+        if (idea.id !== id) return idea
+        const next = idea.decision === decision ? 'pending' : decision
+        return {
+          ...idea,
+          decision: next,
+          stage: next === 'approved' ? idea.stage || PIPELINE_STAGES[0] : null,
+          decidedAt: next === 'pending' ? null : new Date().toISOString(),
+        }
+      }),
+    }))
+  }, [])
+
+  const advanceIdea = useCallback((id) => {
+    setState((prev) => ({
+      ...prev,
+      ideas: prev.ideas.map((idea) => {
+        if (idea.id !== id) return idea
+        const index = PIPELINE_STAGES.indexOf(idea.stage)
+        if (index === -1) return idea
+        const nextStage = PIPELINE_STAGES[index + 1] || 'shipped'
+        return { ...idea, stage: nextStage }
+      }),
+    }))
+  }, [])
+
+  const sendIdeaBack = useCallback((id) => {
+    setState((prev) => ({
+      ...prev,
+      ideas: prev.ideas.map((idea) => {
+        if (idea.id !== id) return idea
+        const index = PIPELINE_STAGES.indexOf(idea.stage)
+        if (index <= 0) return idea
+        return { ...idea, stage: PIPELINE_STAGES[index - 1] }
+      }),
+    }))
+  }, [])
+
   const removeIdea = useCallback((id) => {
     setState((prev) => ({
       ...prev,
@@ -126,30 +161,7 @@ export function useProcessStore() {
     }))
   }, [])
 
-  const toggleChecklist = useCallback((itemId) => {
-    setState((prev) => ({
-      ...prev,
-      checklists: { ...prev.checklists, [itemId]: !prev.checklists[itemId] },
-    }))
-  }, [])
-
-  const setEmotion = useCallback((key, value) => {
-    setState((prev) => ({
-      ...prev,
-      emotions: { ...prev.emotions, [key]: value },
-    }))
-  }, [])
-
-  const setReview = useCallback((index, partial) => {
-    setState((prev) => {
-      const reviews = prev.reviews.map((review, i) =>
-        i === index ? { ...review, ...partial } : review
-      )
-      return { ...prev, reviews }
-    })
-  }, [])
-
-  const addLearning = useCallback((text) => {
+  const addLearning = useCallback((text, ideaText) => {
     const trimmed = text.trim()
     if (!trimmed) return
     setState((prev) => ({
@@ -158,6 +170,7 @@ export function useProcessStore() {
         {
           id: crypto.randomUUID(),
           text: trimmed,
+          ideaText: ideaText || null,
           createdAt: new Date().toISOString(),
         },
         ...prev.learnings,
@@ -180,15 +193,18 @@ export function useProcessStore() {
     }))
   }, [currentWeek])
 
-  const resetProcess = useCallback(() => {
-    setState((prev) => ({
-      ...emptyState(),
-      ideas: prev.ideas,
-      learnings: prev.learnings,
-      weeklyCounts: prev.weeklyCounts,
-      weeklyGoal: prev.weeklyGoal,
-    }))
-  }, [])
+  const markPosted = useCallback((id) => {
+    setState((prev) => {
+      const posted = (prev.weeklyCounts[currentWeek] || 0) + 1
+      return {
+        ...prev,
+        weeklyCounts: { ...prev.weeklyCounts, [currentWeek]: posted },
+        ideas: prev.ideas.map((idea) =>
+          idea.id === id ? { ...idea, stage: 'engagement', data: { ...idea.data, postedAt: new Date().toISOString() } } : idea
+        ),
+      }
+    })
+  }, [currentWeek])
 
   return {
     state,
@@ -196,18 +212,17 @@ export function useProcessStore() {
     weeklyPosted: state.weeklyCounts[currentWeek] || 0,
     patch,
     setCurrentStage,
-    toggleComplete,
-    toggleSkipped,
     addIdea,
     updateIdea,
+    updateIdeaData,
+    setIdeaDecision,
+    advanceIdea,
+    sendIdeaBack,
+    markPosted,
     removeIdea,
-    toggleChecklist,
-    setEmotion,
-    setReview,
     addLearning,
     removeLearning,
     setWeeklyCount,
-    resetProcess,
   }
 }
 
