@@ -6,6 +6,7 @@ import uuid
 import threading
 from creator_store import CreatorStore
 from viral_scanner import ViralScanner
+import zernio_slack
 
 app = Flask(__name__, static_folder=None)
 CORS(app)
@@ -76,6 +77,26 @@ def _process_upload_job(job_id, video_path):
 @app.route('/api/health', methods=['GET'])
 def health_check():
     return jsonify({'status': 'ok'})
+
+
+@app.route('/api/webhooks/zernio', methods=['POST'])
+def zernio_webhook():
+    raw_body = request.get_data()
+    ok, reason = zernio_slack.verify_signature(raw_body, request.headers.get('X-Zernio-Signature'))
+    if not ok:
+        return jsonify({'error': reason}), 401
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'invalid JSON body'}), 400
+
+    status = zernio_slack.handle_event(payload)
+    return jsonify({'status': status})
+
+
+# Register the Zernio webhook subscription (no-op unless ZERNIO_API_KEY and a
+# public URL are configured). Runs in a background thread so boot isn't blocked.
+zernio_slack.start_registration_thread()
 
 
 @app.route('/api/process-url', methods=['POST'])

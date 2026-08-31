@@ -1,6 +1,43 @@
 export const WEEKLY_GOAL_START = 5
 export const DAILY_GOAL_RAMP = 3
 
+export const PIPELINE_STAGES = [
+  'planning',
+  'filming',
+  'editing',
+  'review',
+  'scheduling',
+  'engagement',
+  'iteration',
+]
+
+export const SEED_IDEAS = [
+  {
+    id: 'seed-cheap-olympic-bike',
+    text: 'You have $200 — how fast can we do an Olympic? Cheap bike challenge',
+    source: 'own',
+    impact: 3,
+    effort: 3,
+    decision: 'pending',
+  },
+  {
+    id: 'seed-black-goggles',
+    text: 'Black goggles — see how straight you can go',
+    source: 'own',
+    impact: 3,
+    effort: 3,
+    decision: 'pending',
+  },
+  {
+    id: 'seed-pugathlon',
+    text: 'Pugathlon',
+    source: 'own',
+    impact: 3,
+    effort: 3,
+    decision: 'pending',
+  },
+]
+
 export const STAGES = [
   {
     id: 'idea-generation',
@@ -32,7 +69,7 @@ export const STAGES = [
     accent: '#fb7185',
     owners: ['Brennan'],
     skippable: false,
-    summary: 'Weight ideas by impact + effort and pick the highest ones.',
+    summary: 'Score by impact + effort, then approve or deny. Come back each week and do more.',
     branches: [
       {
         id: 'score',

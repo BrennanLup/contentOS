@@ -1,125 +1,117 @@
-import React, { useState } from 'react'
-import VideoInput from './components/VideoInput'
+import { useState } from 'react'
+import { AppShell } from './components/AppShell'
+import { Page } from './components/Page'
+import { ProcessPage } from './components/ProcessPage'
+import { Sidebar } from './components/Sidebar'
 import VideoAnalysis from './components/VideoAnalysis'
-import ProcessMindmap from './components/ProcessMindmap'
-import ViralRadar from './components/ViralRadar'
-import './App.css'
+import VideoInput from './components/VideoInput'
+import { useProcessStore } from './hooks/useProcessStore'
+import { PIPELINE_STAGES } from './data/contentProcess'
+
+function stageCountsFrom(ideas) {
+  const counts = {
+    'idea-selection': ideas.filter((idea) => (idea.decision || 'pending') === 'pending').length,
+  }
+  for (const stageId of PIPELINE_STAGES) {
+    counts[stageId] = ideas.filter((idea) => idea.decision === 'approved' && idea.stage === stageId).length
+  }
+  return counts
+}
 
 function App() {
-  const [tool, setTool] = useState('radar')
+  const store = useProcessStore()
+  const [view, setView] = useState('process')
+  const [stageId, setStageId] = useState(store.state.currentStage || 'idea-generation')
   const [analysisResult, setAnalysisResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [pendingUrl, setPendingUrl] = useState('')
 
-  const handleAnalysisComplete = (result) => {
-    setAnalysisResult(result)
-    setLoading(false)
-    setError(null)
-  }
-
-  const handleAnalysisStart = () => {
-    setLoading(true)
-    setError(null)
-    setAnalysisResult(null)
-  }
-
-  const handleError = (errorMessage) => {
-    setError(errorMessage)
-    setLoading(false)
+  const handleStageChange = (id) => {
+    setStageId(id)
+    store.setCurrentStage(id)
+    setView('process')
   }
 
   const handleReset = () => {
     setAnalysisResult(null)
     setError(null)
     setLoading(false)
-    setPendingUrl('')
-  }
-
-  const handleDeconstruct = (url) => {
-    setPendingUrl(url)
-    setAnalysisResult(null)
-    setError(null)
-    setLoading(false)
-    setTool('deconstruct')
   }
 
   return (
-    <div className="app-shell">
-      <ProcessMindmap />
-      <div className="app">
-        <header className="app-header">
-          <h1>contentOS</h1>
-          <p>Find what is working in your space, then break it down shot by shot</p>
-          <nav className="tool-nav">
-            <button
-              type="button"
-              className={tool === 'radar' ? 'active' : ''}
-              onClick={() => setTool('radar')}
-            >
-              Viral Radar
-            </button>
-            <button
-              type="button"
-              className={tool === 'deconstruct' ? 'active' : ''}
-              onClick={() => setTool('deconstruct')}
-            >
-              Deconstruct
-            </button>
-          </nav>
-        </header>
-
-        <main className={`app-main ${tool}`}>
-          {tool === 'radar' && (
-            <ViralRadar onDeconstruct={handleDeconstruct} />
-          )}
-
-          {tool === 'deconstruct' && !analysisResult && !loading && (
+    <AppShell
+      sidebar={
+        <Sidebar
+          view={view}
+          stageId={stageId}
+          onViewChange={setView}
+          onStageChange={handleStageChange}
+          stageCounts={stageCountsFrom(store.state.ideas)}
+          weeklyPosted={store.weeklyPosted}
+          weeklyGoal={store.state.weeklyGoal}
+        />
+      }
+    >
+      {view === 'process' ? (
+        <ProcessPage store={store} stageId={stageId} />
+      ) : (
+        <Page
+          title="Deconstruct"
+          description="Break down YouTube, TikTok, and Instagram videos into shots and scripts"
+        >
+          {!analysisResult && !loading && !error ? (
             <VideoInput
-              initialUrl={pendingUrl}
-              onAnalysisComplete={handleAnalysisComplete}
-              onAnalysisStart={handleAnalysisStart}
-              onError={handleError}
+              onAnalysisComplete={(result) => {
+                setAnalysisResult(result)
+                setLoading(false)
+                setError(null)
+              }}
+              onAnalysisStart={() => {
+                setLoading(true)
+                setError(null)
+                setAnalysisResult(null)
+              }}
+              onError={(message) => {
+                setError(message)
+                setLoading(false)
+              }}
             />
-          )}
+          ) : null}
 
-          {tool === 'deconstruct' && loading && (
-            <div className="loading-container">
-              <div className="spinner"></div>
-              <h2>Analyzing Video...</h2>
-              <p>This may take a few minutes depending on video length</p>
-              <div className="loading-steps">
-                <div className="step">⬇️ Downloading video</div>
-                <div className="step">🎥 Detecting shots</div>
-                <div className="step">📝 Transcribing audio</div>
-                <div className="step">🖼️ Extracting thumbnails</div>
+          {loading ? (
+            <section className="flex w-full max-w-content-width flex-col gap-4 p-6">
+              <div className="surface-card">
+                <div className="mb-3 size-5 animate-spin rounded-full border-2 border-border border-t-primary" />
+                <h2 className="text-sm font-medium">Analyzing video</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This may take a few minutes depending on video length
+                </p>
+                <ul className="mt-4 flex flex-col gap-2 text-sm text-muted-foreground">
+                  <li>Downloading video</li>
+                  <li>Detecting shots</li>
+                  <li>Transcribing audio</li>
+                  <li>Extracting thumbnails</li>
+                </ul>
               </div>
-            </div>
-          )}
+            </section>
+          ) : null}
 
-          {tool === 'deconstruct' && error && (
-            <div className="error-container">
-              <h2>❌ Error</h2>
-              <p>{error}</p>
-              <button onClick={handleReset} className="btn-primary">
-                Try Again
-              </button>
-            </div>
-          )}
+          {error ? (
+            <section className="flex w-full max-w-content-width flex-col gap-4 p-6">
+              <div className="surface-card">
+                <h2 className="text-sm font-medium text-danger">Error</h2>
+                <p className="mt-2 text-sm text-muted-foreground">{error}</p>
+                <button type="button" className="button-primary mt-4" onClick={handleReset}>
+                  Try again
+                </button>
+              </div>
+            </section>
+          ) : null}
 
-          {tool === 'deconstruct' && analysisResult && (
-            <VideoAnalysis
-              result={analysisResult}
-              onReset={handleReset}
-            />
-          )}
-        </main>
-
-        <footer className="app-footer">
-          <p>Viral Radar tracks Instagram + YouTube. Deconstruct supports YouTube, TikTok, Instagram, and uploads.</p>
-        </footer>
-      </div>
-    </div>
+          {analysisResult ? <VideoAnalysis result={analysisResult} onReset={handleReset} /> : null}
+        </Page>
+      )}
+    </AppShell>
   )
 }
 
