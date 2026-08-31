@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ExternalLink, RefreshCw } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
+import { ArrowDownWideNarrow, Check, ExternalLink, RefreshCw, X } from 'lucide-react'
 import { DAILY_GOAL_RAMP, PIPELINE_STAGES, STAGES, WEEKLY_GOAL_START } from '../data/contentProcess'
 import { cn } from '../lib/cn'
 import { Page } from './Page'
@@ -175,85 +175,174 @@ function IdeaGeneration({ store }) {
   )
 }
 
+function ScorePicker({ label, value, onChange }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="w-10 text-2xs uppercase tracking-wide text-muted-foreground">{label}</span>
+      <div className="flex gap-0.5">
+        {[1, 2, 3, 4, 5].map((step) => (
+          <button
+            key={step}
+            type="button"
+            title={`${label} ${step}`}
+            onClick={() => onChange(step)}
+            className={cn(
+              'size-5 rounded text-2xs font-medium transition-colors',
+              step === Number(value)
+                ? 'bg-brand text-white'
+                : 'bg-muted text-muted-foreground hover:bg-border-darker',
+            )}
+          >
+            {step}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Keeps rows in a fixed position while scores are being edited: the order is
+// only recomputed when ideas enter or leave the queue, or on an explicit re-rank.
+function useStableOrder(ideas) {
+  const orderRef = useRef([])
+  const resortRef = useRef(false)
+  const [resortToken, setResortToken] = useState(0)
+  const idKey = ideas.map((idea) => idea.id).join('|')
+
+  const order = useMemo(() => {
+    const present = new Set(ideas.map((idea) => idea.id))
+    let next
+    if (resortRef.current) {
+      next = rankedIdeas(ideas).map((idea) => idea.id)
+    } else {
+      const kept = orderRef.current.filter((id) => present.has(id))
+      const known = new Set(kept)
+      const added = rankedIdeas(ideas.filter((idea) => !known.has(idea.id))).map((idea) => idea.id)
+      next = [...kept, ...added]
+    }
+    resortRef.current = false
+    orderRef.current = next
+    return next
+  }, [idKey, resortToken])
+
+  const ordered = order
+    .map((id) => ideas.find((idea) => idea.id === id))
+    .filter(Boolean)
+
+  const resort = () => {
+    resortRef.current = true
+    setResortToken((token) => token + 1)
+  }
+
+  return [ordered, resort]
+}
+
 function IdeaSelection({ store }) {
-  const pending = rankedIdeas(store.state.ideas.filter((idea) => idea.stage === 'idea-selection'))
+  const pending = store.state.ideas.filter((idea) => idea.stage === 'idea-selection')
   const denied = store.state.ideas.filter((idea) => idea.stage === 'denied')
+  const [ordered, resort] = useStableOrder(pending)
+  const topScore = pending.length ? Math.max(...pending.map(ideaScore)) : 0
 
   return (
     <div className="flex flex-col gap-6">
-      <p className="text-xs text-muted-foreground">{pending.length} waiting · {denied.length} denied</p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-muted-foreground">{pending.length} waiting · {denied.length} denied</p>
+        {pending.length > 1 ? (
+          <button type="button" className="button-secondary px-2 py-1 text-xs" onClick={resort}>
+            <ArrowDownWideNarrow className="size-3.5" />
+            Re-rank by score
+          </button>
+        ) : null}
+      </div>
+
       {pending.length === 0 ? (
         <p className="text-sm text-muted-foreground">Selection queue is clear.</p>
       ) : (
-        <div className="flex flex-col gap-3">
-          {pending.map((idea, index) => (
-            <article key={idea.id} className={cn('surface-card', index === 0 && 'border-brand')}>
-              <div className="mb-3 flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-medium">{idea.text}</h3>
+        <ul className="flex flex-col gap-1.5">
+          {ordered.map((idea) => {
+            const score = ideaScore(idea)
+            return (
+              <li
+                key={idea.id}
+                className={cn(
+                  'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-card px-3 py-2',
+                  score === topScore && 'border-brand/60',
+                )}
+              >
+                <p className="min-w-0 flex-1 truncate text-sm" title={idea.text}>
+                  {idea.text}
+                </p>
+
+                <ScorePicker
+                  label="Impact"
+                  value={idea.impact}
+                  onChange={(value) => store.updateIdea(idea.id, { impact: value })}
+                />
+                <ScorePicker
+                  label="Effort"
+                  value={idea.effort}
+                  onChange={(value) => store.updateIdea(idea.id, { effort: value })}
+                />
+
+                <span className="w-9 text-right text-2xs font-semibold text-brand">{score.toFixed(2)}</span>
+
+                <div className="flex items-center gap-1">
                   {idea.notionUrl ? (
                     <a
                       href={idea.notionUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="mt-1 inline-flex items-center gap-1 text-xs text-brand hover:underline"
+                      title="Open in Notion"
+                      className="button size-7 p-0 text-muted-foreground"
                     >
-                      Open in Notion <ExternalLink className="size-3" />
+                      <ExternalLink className="size-3.5" />
                     </a>
                   ) : null}
+                  <button
+                    type="button"
+                    title="Approve to Planning"
+                    className="button size-7 p-0 text-success hover:bg-success/10"
+                    onClick={() => store.setIdeaDecision(idea.id, 'approved')}
+                  >
+                    <Check className="size-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title="Deny"
+                    className="button size-7 p-0 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+                    onClick={() => store.setIdeaDecision(idea.id, 'denied')}
+                  >
+                    <X className="size-4" />
+                  </button>
                 </div>
-                <span className="rounded-full bg-brand/10 px-2 py-0.5 text-2xs font-semibold text-brand">
-                  {ideaScore(idea).toFixed(2)}
-                </span>
-              </div>
-              <div className="mb-4 grid gap-3 sm:grid-cols-2">
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  Impact {idea.impact}
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    className="accent-brand"
-                    value={idea.impact}
-                    onChange={(event) => store.updateIdea(idea.id, { impact: Number(event.target.value) })}
-                  />
-                </label>
-                <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-                  Effort {idea.effort}
-                  <input
-                    type="range"
-                    min="1"
-                    max="5"
-                    className="accent-brand"
-                    value={idea.effort}
-                    onChange={(event) => store.updateIdea(idea.id, { effort: Number(event.target.value) })}
-                  />
-                </label>
-              </div>
-              <div className="flex gap-2">
-                <button type="button" className="button-primary" onClick={() => store.setIdeaDecision(idea.id, 'approved')}>
-                  Approve to Planning
-                </button>
-                <button type="button" className="button-secondary" onClick={() => store.setIdeaDecision(idea.id, 'denied')}>
-                  Deny
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+              </li>
+            )
+          })}
+        </ul>
       )}
 
       {denied.length ? (
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1.5">
           <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Denied</h3>
-          {denied.map((idea) => (
-            <div key={idea.id} className="surface-card flex flex-wrap items-center gap-3">
-              <span className="min-w-0 flex-1 text-sm">{idea.text}</span>
-              <button type="button" className="button-secondary" onClick={() => store.setIdeaDecision(idea.id, 'denied')}>
-                Return to selection
-              </button>
-            </div>
-          ))}
+          <ul className="flex flex-col gap-1.5">
+            {denied.map((idea) => (
+              <li
+                key={idea.id}
+                className="flex items-center gap-3 rounded-md border border-border bg-card px-3 py-2"
+              >
+                <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground" title={idea.text}>
+                  {idea.text}
+                </p>
+                <button
+                  type="button"
+                  className="button-secondary px-2 py-1 text-xs"
+                  onClick={() => store.setIdeaDecision(idea.id, 'denied')}
+                >
+                  Return to queue
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
     </div>
