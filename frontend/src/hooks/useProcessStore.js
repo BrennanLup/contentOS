@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
-import { PIPELINE_STAGES, SEED_IDEAS, WEEKLY_GOAL_START } from '../data/contentProcess'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import axios from 'axios'
+import { PIPELINE_STAGES, WEEKLY_GOAL_START } from '../data/contentProcess'
 
 const STORAGE_KEY = 'contentos-process-v1'
+const MIGRATION_KEY = 'contentos-notion-migration-v1'
+const SETTINGS_KEY = 'contentos-settings-v1'
+const STAGE_FLOW = ['idea-generation', 'idea-selection', ...PIPELINE_STAGES, 'shipped']
 
 function weekKey(date = new Date()) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
@@ -12,60 +16,125 @@ function weekKey(date = new Date()) {
   return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`
 }
 
-function normalizeIdea(idea) {
-  const decision = idea.decision === 'approved' || idea.decision === 'denied' ? idea.decision : 'pending'
-  return {
-    ...idea,
-    decision,
-    stage: idea.stage ?? (decision === 'approved' ? PIPELINE_STAGES[0] : null),
-    data: idea.data || {},
+function loadSettings() {
+  try {
+    return {
+      weeklyGoal: WEEKLY_GOAL_START,
+      weeklyCounts: {},
+      ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'),
+    }
+  } catch {
+    return { weeklyGoal: WEEKLY_GOAL_START, weeklyCounts: {} }
   }
 }
 
-function seedIdeas() {
-  const now = new Date().toISOString()
-  return SEED_IDEAS.map((idea) =>
-    normalizeIdea({
-      ...idea,
-      createdAt: idea.createdAt || now,
-    })
-  )
+function legacyStage(idea) {
+  if (idea.decision === 'denied') return 'denied'
+  if (idea.decision === 'approved') return idea.stage || 'planning'
+  return 'idea-selection'
 }
 
-function withSeedIdeas(ideas) {
-  const existing = Array.isArray(ideas) ? ideas.map(normalizeIdea) : []
-  const missing = seedIdeas().filter((seed) => !existing.some((idea) => idea.id === seed.id || idea.text === seed.text))
-  return [...missing, ...existing]
+function legacyPayload(idea) {
+  const reviews = idea.data?.reviews || []
+  const reviewNotes = reviews
+    .flatMap((review) => [review.blockers, review.tips])
+    .filter(Boolean)
+    .join('\n')
+  return {
+    contentosId: idea.id,
+    text: idea.text,
+    stage: legacyStage(idea),
+    impact: idea.impact || 3,
+    effort: idea.effort || 3,
+    draft: idea.data?.script || '',
+    hook: idea.data?.hook || '',
+    shotList: idea.data?.shotList || '',
+    reviewNotes,
+    learning: idea.data?.learning || '',
+    publishDate: idea.data?.postedAt || idea.data?.releaseDate || null,
+    liveUrl: idea.data?.liveUrl || null,
+  }
 }
 
-function emptyState() {
+function initialState() {
+  const settings = loadSettings()
   return {
     currentStage: 'idea-generation',
-    ideas: seedIdeas(),
-    learnings: [],
-    weeklyCounts: {},
-    weeklyGoal: WEEKLY_GOAL_START,
+    ideas: [],
+    weeklyGoal: settings.weeklyGoal,
+    weeklyCounts: settings.weeklyCounts,
+    loading: true,
+    error: null,
   }
 }
 
-function loadState() {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return emptyState()
-    const parsed = JSON.parse(raw)
-    return { ...emptyState(), ...parsed, ideas: withSeedIdeas(parsed.ideas) }
-  } catch {
-    return emptyState()
-  }
+function errorMessage(error) {
+  return error.response?.data?.error || error.message || 'Notion sync failed'
 }
 
 export function useProcessStore() {
-  const [state, setState] = useState(loadState)
+  const [state, setState] = useState(initialState)
   const currentWeek = weekKey()
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [state])
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ weeklyGoal: state.weeklyGoal, weeklyCounts: state.weeklyCounts }),
+    )
+  }, [state.weeklyGoal, state.weeklyCounts])
+
+  const fetchContent = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setState((prev) => ({ ...prev, loading: true, error: null }))
+    try {
+      const response = await axios.get('/api/content')
+      setState((prev) => ({
+        ...prev,
+        ideas: response.data.items || [],
+        loading: false,
+        error: null,
+      }))
+      return response.data.items || []
+    } catch (error) {
+      setState((prev) => ({ ...prev, loading: false, error: errorMessage(error) }))
+      return null
+    }
+  }, [])
+
+  const migrateLegacyIdeas = useCallback(async () => {
+    if (localStorage.getItem(MIGRATION_KEY)) return
+    let ideas = []
+    try {
+      const legacy = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+      ideas = Array.isArray(legacy.ideas) ? legacy.ideas : []
+    } catch {
+      ideas = []
+    }
+    try {
+      for (const idea of ideas) {
+        if (idea?.id && idea?.text) {
+          await axios.post('/api/content', legacyPayload(idea))
+        }
+      }
+      localStorage.setItem(MIGRATION_KEY, new Date().toISOString())
+    } catch (error) {
+      setState((prev) => ({ ...prev, error: `Legacy migration paused: ${errorMessage(error)}` }))
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const initialize = async () => {
+      await migrateLegacyIdeas()
+      if (active) await fetchContent()
+    }
+    initialize()
+    const onFocus = () => fetchContent({ quiet: true })
+    window.addEventListener('focus', onFocus)
+    return () => {
+      active = false
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [fetchContent, migrateLegacyIdeas])
 
   const patch = useCallback((partial) => {
     setState((prev) => ({ ...prev, ...partial }))
@@ -75,153 +144,144 @@ export function useProcessStore() {
     setState((prev) => ({ ...prev, currentStage: id }))
   }, [])
 
-  const addIdea = useCallback((text, source) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
+  const replaceIdea = useCallback((item) => {
     setState((prev) => ({
       ...prev,
-      ideas: [
-        {
-          id: crypto.randomUUID(),
-          text: trimmed,
-          source,
-          impact: 3,
-          effort: 3,
-          decision: 'pending',
-          stage: null,
-          data: {},
-          createdAt: new Date().toISOString(),
-        },
-        ...prev.ideas,
-      ],
+      ideas: prev.ideas.map((idea) => (idea.id === item.id ? item : idea)),
+      error: null,
     }))
+  }, [])
+
+  const updateRemote = useCallback(async (id, changes, optimistic) => {
+    let previous
+    setState((prev) => {
+      previous = prev.ideas.find((idea) => idea.id === id)
+      return {
+        ...prev,
+        error: null,
+        ideas: prev.ideas.map((idea) => (idea.id === id ? optimistic(idea) : idea)),
+      }
+    })
+    try {
+      const response = await axios.patch(`/api/content/${id}`, changes)
+      replaceIdea(response.data.item)
+      return response.data.item
+    } catch (error) {
+      setState((prev) => ({
+        ...prev,
+        ideas: prev.ideas.map((idea) => (idea.id === id && previous ? previous : idea)),
+        error: errorMessage(error),
+      }))
+      return null
+    }
+  }, [replaceIdea])
+
+  const addIdea = useCallback(async (text) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    try {
+      const response = await axios.post('/api/content', {
+        text: trimmed,
+        stage: 'idea-generation',
+        impact: 3,
+        effort: 3,
+      })
+      setState((prev) => ({
+        ...prev,
+        ideas: [response.data.item, ...prev.ideas.filter((idea) => idea.id !== response.data.item.id)],
+        error: null,
+      }))
+    } catch (error) {
+      setState((prev) => ({ ...prev, error: errorMessage(error) }))
+    }
   }, [])
 
   const updateIdea = useCallback((id, partial) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.map((idea) => (idea.id === id ? { ...idea, ...partial } : idea)),
-    }))
-  }, [])
+    const allowed = Object.fromEntries(
+      Object.entries(partial).filter(([key]) => ['text', 'impact', 'effort'].includes(key)),
+    )
+    return updateRemote(id, allowed, (idea) => ({ ...idea, ...allowed }))
+  }, [updateRemote])
 
-  const updateIdeaData = useCallback((id, partial) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.map((idea) =>
-        idea.id === id ? { ...idea, data: { ...idea.data, ...partial } } : idea
-      ),
+  const moveIdea = useCallback((id, stage) => (
+    updateRemote(id, { stage }, (idea) => ({
+      ...idea,
+      stage,
+      stageName: stage,
+      decision: stage === 'denied'
+        ? 'denied'
+        : ['idea-generation', 'idea-selection'].includes(stage)
+          ? 'pending'
+          : 'approved',
     }))
-  }, [])
+  ), [updateRemote])
 
   const setIdeaDecision = useCallback((id, decision) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.map((idea) => {
-        if (idea.id !== id) return idea
-        const next = idea.decision === decision ? 'pending' : decision
-        return {
-          ...idea,
-          decision: next,
-          stage: next === 'approved' ? idea.stage || PIPELINE_STAGES[0] : null,
-          decidedAt: next === 'pending' ? null : new Date().toISOString(),
-        }
-      }),
-    }))
-  }, [])
+    const idea = state.ideas.find((item) => item.id === id)
+    const toggling = idea?.decision === decision
+    return moveIdea(id, toggling ? 'idea-selection' : decision === 'approved' ? 'planning' : 'denied')
+  }, [moveIdea, state.ideas])
 
   const advanceIdea = useCallback((id) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.map((idea) => {
-        if (idea.id !== id) return idea
-        const index = PIPELINE_STAGES.indexOf(idea.stage)
-        if (index === -1) return idea
-        const nextStage = PIPELINE_STAGES[index + 1] || 'shipped'
-        return { ...idea, stage: nextStage }
-      }),
-    }))
-  }, [])
+    const idea = state.ideas.find((item) => item.id === id)
+    if (!idea) return
+    const index = STAGE_FLOW.indexOf(idea.stage)
+    if (index === -1 || index === STAGE_FLOW.length - 1) return
+    return moveIdea(id, STAGE_FLOW[index + 1])
+  }, [moveIdea, state.ideas])
 
   const sendIdeaBack = useCallback((id) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.map((idea) => {
-        if (idea.id !== id) return idea
-        const index = PIPELINE_STAGES.indexOf(idea.stage)
-        if (index <= 0) return idea
-        return { ...idea, stage: PIPELINE_STAGES[index - 1] }
-      }),
-    }))
-  }, [])
-
-  const removeIdea = useCallback((id) => {
-    setState((prev) => ({
-      ...prev,
-      ideas: prev.ideas.filter((idea) => idea.id !== id),
-    }))
-  }, [])
-
-  const addLearning = useCallback((text, ideaText) => {
-    const trimmed = text.trim()
-    if (!trimmed) return
-    setState((prev) => ({
-      ...prev,
-      learnings: [
-        {
-          id: crypto.randomUUID(),
-          text: trimmed,
-          ideaText: ideaText || null,
-          createdAt: new Date().toISOString(),
-        },
-        ...prev.learnings,
-      ],
-    }))
-  }, [])
-
-  const removeLearning = useCallback((id) => {
-    setState((prev) => ({
-      ...prev,
-      learnings: prev.learnings.filter((item) => item.id !== id),
-    }))
-  }, [])
-
-  const setWeeklyCount = useCallback((count) => {
-    const next = Math.max(0, count)
-    setState((prev) => ({
-      ...prev,
-      weeklyCounts: { ...prev.weeklyCounts, [currentWeek]: next },
-    }))
-  }, [currentWeek])
+    const idea = state.ideas.find((item) => item.id === id)
+    if (!idea) return
+    const index = STAGE_FLOW.indexOf(idea.stage)
+    if (index <= 0) return
+    return moveIdea(id, STAGE_FLOW[index - 1])
+  }, [moveIdea, state.ideas])
 
   const markPosted = useCallback((id) => {
-    setState((prev) => {
-      const posted = (prev.weeklyCounts[currentWeek] || 0) + 1
-      return {
-        ...prev,
-        weeklyCounts: { ...prev.weeklyCounts, [currentWeek]: posted },
-        ideas: prev.ideas.map((idea) =>
-          idea.id === id ? { ...idea, stage: 'engagement', data: { ...idea.data, postedAt: new Date().toISOString() } } : idea
-        ),
-      }
-    })
+    const now = new Date().toISOString()
+    setState((prev) => ({
+      ...prev,
+      weeklyCounts: {
+        ...prev.weeklyCounts,
+        [currentWeek]: (prev.weeklyCounts[currentWeek] || 0) + 1,
+      },
+    }))
+    return updateRemote(
+      id,
+      { stage: 'engagement', publishDate: now },
+      (idea) => ({ ...idea, stage: 'engagement', data: { ...idea.data, publishDate: now } }),
+    )
+  }, [currentWeek, updateRemote])
+
+  const setWeeklyCount = useCallback((count) => {
+    setState((prev) => ({
+      ...prev,
+      weeklyCounts: { ...prev.weeklyCounts, [currentWeek]: Math.max(0, count) },
+    }))
   }, [currentWeek])
+
+  const removeIdea = useCallback((id) => moveIdea(id, 'denied'), [moveIdea])
+
+  const weeklyPostedFromNotion = useMemo(() => state.ideas.filter((idea) => {
+    const published = idea.data?.publishDate
+    return published && weekKey(new Date(published)) === currentWeek
+  }).length, [currentWeek, state.ideas])
 
   return {
     state,
     currentWeek,
-    weeklyPosted: state.weeklyCounts[currentWeek] || 0,
+    weeklyPosted: Math.max(state.weeklyCounts[currentWeek] || 0, weeklyPostedFromNotion),
     patch,
     setCurrentStage,
+    refresh: fetchContent,
     addIdea,
     updateIdea,
-    updateIdeaData,
     setIdeaDecision,
     advanceIdea,
     sendIdeaBack,
     markPosted,
     removeIdea,
-    addLearning,
-    removeLearning,
     setWeeklyCount,
   }
 }
