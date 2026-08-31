@@ -270,3 +270,68 @@ def ensure_webhook_registered():
 
 def start_registration_thread():
     threading.Thread(target=ensure_webhook_registered, daemon=True).start()
+
+
+_last_slack_test = [0.0]
+_SLACK_TEST_COOLDOWN = 30  # seconds; endpoint is public, keep it un-spammable
+
+
+def diagnostics(send_test=False):
+    """Report integration health. Optionally posts a test message to Slack."""
+    import time
+
+    result = {
+        'zernio_api_key_set': bool(os.environ.get('ZERNIO_API_KEY')),
+        'webhook_secret_set': bool(os.environ.get('ZERNIO_WEBHOOK_SECRET')),
+        'slack_webhook_url_set': bool(os.environ.get('SLACK_WEBHOOK_URL')),
+        'expected_webhook_url': _public_webhook_url(),
+    }
+
+    api_key = os.environ.get('ZERNIO_API_KEY')
+    if api_key:
+        headers = {'Authorization': f'Bearer {api_key}'}
+        try:
+            resp = requests.get(f'{ZERNIO_API_BASE}/webhooks/settings', headers=headers, timeout=15)
+            resp.raise_for_status()
+            hook = next(
+                (w for w in resp.json().get('webhooks', []) if w.get('name') == WEBHOOK_NAME),
+                None,
+            )
+            if hook is None:
+                # Self-heal: try to register now, then re-check.
+                ensure_webhook_registered()
+                resp = requests.get(f'{ZERNIO_API_BASE}/webhooks/settings', headers=headers, timeout=15)
+                resp.raise_for_status()
+                hook = next(
+                    (w for w in resp.json().get('webhooks', []) if w.get('name') == WEBHOOK_NAME),
+                    None,
+                )
+            result['zernio_webhook_registered'] = hook is not None
+            if hook:
+                result['zernio_webhook_url'] = hook.get('url')
+                result['zernio_webhook_events'] = hook.get('events')
+                result['zernio_webhook_active'] = hook.get('isActive')
+        except requests.RequestException as exc:
+            result['zernio_error'] = str(exc)
+
+    if send_test:
+        now = time.time()
+        if now - _last_slack_test[0] < _SLACK_TEST_COOLDOWN:
+            result['slack_test'] = 'rate limited, try again shortly'
+        else:
+            _last_slack_test[0] = now
+            url = os.environ.get('SLACK_WEBHOOK_URL')
+            if not url:
+                result['slack_test'] = 'SLACK_WEBHOOK_URL not set'
+            else:
+                try:
+                    resp = requests.post(
+                        url,
+                        json={'text': ':wave: contentOS test — Slack notifications are wired up.'},
+                        timeout=10,
+                    )
+                    result['slack_test'] = f'{resp.status_code} {resp.text[:120]}'
+                except requests.RequestException as exc:
+                    result['slack_test'] = f'error: {exc}'
+
+    return result
