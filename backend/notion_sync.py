@@ -55,6 +55,7 @@ PROPERTY_DEFINITIONS = {
     },
     'Owner': {'people': {}},
     'Due Date': {'date': {}},
+    'Filming Date': {'date': {}},
     'Impact': {'number': {'format': 'number'}},
     'Effort': {'number': {'format': 'number'}},
     'Draft': {'rich_text': {}},
@@ -63,6 +64,7 @@ PROPERTY_DEFINITIONS = {
     'Review Notes': {'rich_text': {}},
     'Learning': {'rich_text': {}},
     'Publish Date': {'date': {}},
+    'Posted At': {'date': {}},
     'Live URL': {'url': {}},
     'contentOS ID': {'rich_text': {}},
 }
@@ -88,6 +90,15 @@ def _rich_text(value):
     ]
 
 
+def _as_date(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text[:10]
+
+
 class NotionContentStore:
     def __init__(self, token=None, database_id=None):
         self.token = token or os.environ.get('NOTION_TOKEN')
@@ -95,6 +106,7 @@ class NotionContentStore:
         self._data_source_id = None
         self._schema = None
         self._title_property = 'Name'
+        self._views_result = None
 
     @property
     def configured(self):
@@ -164,6 +176,173 @@ class NotionContentStore:
                 return name
         return logical
 
+    def _property_id(self, logical):
+        schema = self.get_schema()
+        actual = self._property_name(logical)
+        return (schema.get(actual) or {}).get('id')
+
+    def _stage_type(self):
+        schema = self.get_schema()
+        actual = self._property_name('Stage')
+        prop_type = (schema.get(actual) or {}).get('type')
+        return prop_type if prop_type in ('select', 'status') else 'select'
+
+    def _stage_filter(self, operator, value):
+        return {'property': self._property_name('Stage'), self._stage_type(): {operator: value}}
+
+    def list_views(self):
+        results = []
+        cursor = None
+        while True:
+            params = {'database_id': self.database_id, 'page_size': 100}
+            if cursor:
+                params['start_cursor'] = cursor
+            response = self._request('GET', '/views', params=params)
+            results.extend(response.get('results') or [])
+            if not response.get('has_more'):
+                break
+            cursor = response.get('next_cursor')
+        return results
+
+    def _desired_views(self):
+        stage_id = self._property_id('Stage')
+        filming_id = self._property_id('Filming Date')
+        publish_id = self._property_id('Publish Date')
+        stage_type = self._stage_type()
+        views = [
+            {
+                'name': 'Pipeline',
+                'type': 'board',
+                'filter': self._stage_filter('does_not_equal', 'Denied'),
+                'configuration': {
+                    'type': 'board',
+                    'group_by': {
+                        'type': stage_type,
+                        'property_id': stage_id,
+                        'group_by': 'option',
+                        'sort': {'type': 'manual'},
+                    },
+                    'card_layout': 'compact',
+                },
+            },
+            {
+                'name': 'Idea Queue',
+                'type': 'table',
+                'filter': {
+                    'or': [
+                        self._stage_filter('equals', 'Idea Generation'),
+                        self._stage_filter('equals', 'Idea Selection'),
+                    ]
+                },
+                'sorts': [{'property': 'Impact', 'direction': 'descending'}],
+            },
+            {
+                'name': 'Active Work',
+                'type': 'table',
+                'filter': {
+                    'and': [
+                        self._stage_filter('does_not_equal', 'Idea Generation'),
+                        self._stage_filter('does_not_equal', 'Idea Selection'),
+                        self._stage_filter('does_not_equal', 'Denied'),
+                        self._stage_filter('does_not_equal', 'Shipped'),
+                    ]
+                },
+                'sorts': [{'property': 'Filming Date', 'direction': 'ascending'}],
+            },
+            {
+                'name': 'This Week',
+                'type': 'table',
+                'filter': {
+                    'and': [
+                        {'property': self._property_name('Publish Date'), 'date': {'this_week': {}}},
+                        self._stage_filter('does_not_equal', 'Denied'),
+                    ]
+                },
+                'sorts': [{'property': 'Publish Date', 'direction': 'ascending'}],
+            },
+            {
+                'name': 'Shipped',
+                'type': 'table',
+                'filter': self._stage_filter('equals', 'Shipped'),
+                'sorts': [{'property': 'Posted At', 'direction': 'descending'}],
+            },
+            {
+                'name': 'Denied',
+                'type': 'table',
+                'filter': self._stage_filter('equals', 'Denied'),
+            },
+        ]
+        if publish_id:
+            views.append({
+                'name': 'Publish Calendar',
+                'type': 'calendar',
+                'filter': {'property': self._property_name('Publish Date'), 'date': {'is_not_empty': True}},
+                'configuration': {
+                    'type': 'calendar',
+                    'date_property_id': publish_id,
+                    'view_range': 'month',
+                    'show_weekends': True,
+                },
+            })
+        if filming_id:
+            views.append({
+                'name': 'Filming Calendar',
+                'type': 'calendar',
+                'filter': {'property': self._property_name('Filming Date'), 'date': {'is_not_empty': True}},
+                'configuration': {
+                    'type': 'calendar',
+                    'date_property_id': filming_id,
+                    'view_range': 'month',
+                    'show_weekends': True,
+                },
+            })
+        if filming_id and publish_id:
+            views.append({
+                'name': 'Production Timeline',
+                'type': 'timeline',
+                'filter': {
+                    'and': [
+                        {'property': self._property_name('Filming Date'), 'date': {'is_not_empty': True}},
+                        {'property': self._property_name('Publish Date'), 'date': {'is_not_empty': True}},
+                    ]
+                },
+                'configuration': {
+                    'type': 'timeline',
+                    'date_property_id': filming_id,
+                    'end_date_property_id': publish_id,
+                    'show_table': True,
+                },
+            })
+        return views
+
+    def ensure_views(self):
+        if self._views_result is not None:
+            return self._views_result
+        existing = {view.get('name'): view for view in self.list_views() if view.get('name')}
+        created = []
+        errors = []
+        skipped = []
+        source_id = self.resolve_data_source()
+        for view in self._desired_views():
+            if view['name'] in existing:
+                skipped.append(view['name'])
+                continue
+            payload = {
+                'database_id': self.database_id,
+                'data_source_id': source_id,
+                **view,
+            }
+            try:
+                created.append(self._request('POST', '/views', json=payload).get('name') or view['name'])
+            except NotionError as exc:
+                errors.append({'name': view['name'], 'error': str(exc)})
+        self._views_result = {
+            'created': created,
+            'existing': skipped,
+            'errors': errors,
+        }
+        return self._views_result
+
     def ensure_schema(self):
         schema = self.get_schema(refresh=True)
         stage_actual = self._property_name('Stage')
@@ -224,6 +403,10 @@ class NotionContentStore:
                 json={'properties': missing},
             )
             schema = self.get_schema(refresh=True)
+        try:
+            views = self.ensure_views()
+        except NotionError as exc:
+            views = {'created': [], 'existing': [], 'errors': [{'name': '*', 'error': str(exc)}]}
         return {
             'ready': all(name in schema for name in PROPERTY_DEFINITIONS),
             'data_source_id': self.resolve_data_source(),
@@ -233,6 +416,7 @@ class NotionContentStore:
                 for name, prop in schema.items()
             },
             'added': list(missing),
+            'views': views,
         }
 
     def _extract_property(self, props, name):
@@ -284,13 +468,16 @@ class NotionContentStore:
             'effort': self._extract_property(props, 'Effort') or 3,
             'owner': self._extract_property(props, 'Owner') or [],
             'dueDate': self._extract_property(props, 'Due Date'),
+            'filmingDate': self._extract_property(props, 'Filming Date') or self._extract_property(props, 'Due Date'),
             'data': {
                 'script': self._extract_property(props, 'Draft') or '',
                 'hook': self._extract_property(props, 'Hook') or '',
                 'shotList': self._extract_property(props, 'Shot List') or '',
                 'reviewNotes': self._extract_property(props, 'Review Notes') or '',
                 'learning': self._extract_property(props, 'Learning') or '',
+                'filmingDate': self._extract_property(props, 'Filming Date') or self._extract_property(props, 'Due Date'),
                 'publishDate': self._extract_property(props, 'Publish Date'),
+                'postedAt': self._extract_property(props, 'Posted At'),
                 'liveUrl': self._extract_property(props, 'Live URL'),
             },
             'createdAt': page.get('created_time'),
@@ -324,6 +511,10 @@ class NotionContentStore:
 
     def _properties_for(self, data, creating=False):
         properties = {}
+        filming = _as_date(data.get('filmingDate')) if 'filmingDate' in data else None
+        publish = _as_date(data.get('publishDate')) if 'publishDate' in data else None
+        if filming and publish and filming > publish:
+            raise NotionError('Filming date must be on or before publish date', 400)
         if 'text' in data:
             properties[self._title_property] = {'title': _rich_text(str(data['text']).strip())}
         if 'stage' in data:
@@ -336,9 +527,18 @@ class NotionContentStore:
                 if value < 1 or value > 5:
                     raise NotionError(f'{field} must be between 1 and 5', 400)
                 properties[self._property_name(notion_name)] = {'number': value}
-        for field, notion_name in (('dueDate', 'Due Date'), ('publishDate', 'Publish Date')):
-            if field in data:
-                properties[self._property_name(notion_name)] = {'date': {'start': data[field]} if data[field] else None}
+        payload = data
+        if 'filmingDate' in data and 'dueDate' not in data:
+            payload = {**data, 'dueDate': data.get('filmingDate')}
+        for field, notion_name in (
+            ('dueDate', 'Due Date'),
+            ('filmingDate', 'Filming Date'),
+            ('publishDate', 'Publish Date'),
+            ('postedAt', 'Posted At'),
+        ):
+            if field in payload:
+                start = _as_date(payload[field])
+                properties[self._property_name(notion_name)] = {'date': {'start': start} if start else None}
         if 'liveUrl' in data:
             properties[self._property_name('Live URL')] = {'url': data['liveUrl'] or None}
         for field, notion_name in (
@@ -399,8 +599,8 @@ class NotionContentStore:
     def update_content(self, page_id, data):
         self.ensure_schema()
         allowed = {
-            'text', 'stage', 'impact', 'effort', 'dueDate', 'publishDate',
-            'liveUrl', 'draft', 'hook', 'shotList', 'reviewNotes', 'learning',
+            'text', 'stage', 'impact', 'effort', 'dueDate', 'filmingDate', 'publishDate',
+            'postedAt', 'liveUrl', 'draft', 'hook', 'shotList', 'reviewNotes', 'learning',
         }
         unknown = set(data) - allowed
         if unknown:

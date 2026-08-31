@@ -26,6 +26,10 @@ function formatDate(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString()
 }
 
+function dateOnly(value) {
+  return value ? String(value).slice(0, 10) : ''
+}
+
 function IdeaComposer({ onAdd }) {
   const [text, setText] = useState('')
   const [saving, setSaving] = useState(false)
@@ -65,6 +69,7 @@ function Readiness({ idea, stageId }) {
     filming: [
       ['Shot list', data.shotList],
       ['Draft', data.script],
+      ['Filming date', idea.filmingDate || data.filmingDate],
     ],
     editing: [['Draft', data.script]],
     review: [['Review notes', data.reviewNotes]],
@@ -100,7 +105,10 @@ function ProjectCard({ idea, store, stageId, advanceLabel, onAdvance, showBack =
           <h3 className="text-sm font-medium">{idea.text}</h3>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
             {owners.length ? <span>{owners.join(', ')}</span> : <span>Unassigned</span>}
-            {idea.dueDate ? <span>Due {formatDate(idea.dueDate)}</span> : <span>No due date</span>}
+            {idea.filmingDate || idea.data?.filmingDate ? (
+              <span>Film {formatDate(idea.filmingDate || idea.data.filmingDate)}</span>
+            ) : null}
+            {idea.data?.publishDate ? <span>Publish {formatDate(idea.data.publishDate)}</span> : null}
           </div>
         </div>
         <span className="shrink-0 rounded-full bg-brand/10 px-2 py-0.5 text-2xs font-semibold text-brand">
@@ -172,6 +180,102 @@ function IdeaGeneration({ store }) {
         </div>
       )}
     </div>
+  )
+}
+
+function DateField({ label, value, onChange }) {
+  return (
+    <label className="flex shrink-0 items-center gap-1.5 text-2xs uppercase tracking-wide text-muted-foreground">
+      {label}
+      <input
+        type="date"
+        className="field h-7 w-[9.5rem] px-2 py-1 text-xs"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  )
+}
+
+function IdeaSelectionRow({ idea, store, highlighted }) {
+  const [filmingDate, setFilmingDate] = useState(dateOnly(idea.filmingDate || idea.data?.filmingDate))
+  const [publishDate, setPublishDate] = useState(dateOnly(idea.data?.publishDate))
+  const [saving, setSaving] = useState(false)
+  const score = ideaScore(idea)
+  const datesReady = Boolean(filmingDate && publishDate)
+  const datesOrdered = !datesReady || filmingDate <= publishDate
+
+  return (
+    <li
+      className={cn(
+        'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-card px-3 py-2',
+        highlighted && 'border-brand/60',
+      )}
+    >
+      <p className="min-w-[14rem] flex-1 break-words text-sm">{idea.text}</p>
+
+      <ScorePicker
+        label="Impact"
+        value={idea.impact}
+        onChange={(value) => store.updateIdea(idea.id, { impact: value })}
+      />
+      <ScorePicker
+        label="Effort"
+        value={idea.effort}
+        onChange={(value) => store.updateIdea(idea.id, { effort: value })}
+      />
+
+      <span className="w-9 shrink-0 text-right text-2xs font-semibold text-brand">
+        {score.toFixed(2)}
+      </span>
+
+      <DateField label="Film" value={filmingDate} onChange={setFilmingDate} />
+      <DateField label="Publish" value={publishDate} onChange={setPublishDate} />
+
+      <div className="flex shrink-0 items-center gap-1">
+        {idea.notionUrl ? (
+          <a
+            href={idea.notionUrl}
+            target="_blank"
+            rel="noreferrer"
+            title="Open in Notion"
+            className="button size-7 p-0 text-muted-foreground"
+          >
+            <ExternalLink className="size-3.5" />
+          </a>
+        ) : null}
+        <button
+          type="button"
+          disabled={!datesReady || !datesOrdered || saving}
+          title={
+            !datesReady
+              ? 'Set filming and publish dates to approve'
+              : !datesOrdered
+                ? 'Filming date must be on or before publish date'
+                : 'Approve to Planning'
+          }
+          className="button size-7 p-0 text-success hover:bg-success/10 disabled:opacity-40"
+          onClick={async () => {
+            setSaving(true)
+            await store.approveIdea(idea.id, { filmingDate, publishDate })
+            setSaving(false)
+          }}
+        >
+          <Check className="size-4" />
+        </button>
+        <button
+          type="button"
+          title="Deny"
+          className="button size-7 p-0 text-muted-foreground hover:bg-danger/10 hover:text-danger"
+          onClick={() => store.setIdeaDecision(idea.id, 'denied')}
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      {!datesOrdered ? (
+        <p className="w-full text-2xs text-danger">Film date must be on or before publish date.</p>
+      ) : null}
+    </li>
   )
 }
 
@@ -248,7 +352,9 @@ function IdeaSelection({ store }) {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-muted-foreground">{pending.length} waiting · {denied.length} denied</p>
+        <p className="text-xs text-muted-foreground">
+          {pending.length} waiting · {denied.length} denied · Approve by setting film + publish dates
+        </p>
         {pending.length > 1 ? (
           <button type="button" className="button-secondary px-2 py-1 text-xs" onClick={resort}>
             <ArrowDownWideNarrow className="size-3.5" />
@@ -261,65 +367,14 @@ function IdeaSelection({ store }) {
         <p className="text-sm text-muted-foreground">Selection queue is clear.</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
-          {ordered.map((idea) => {
-            const score = ideaScore(idea)
-            return (
-              <li
-                key={idea.id}
-                className={cn(
-                  'flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-border bg-card px-3 py-2',
-                  score === topScore && 'border-brand/60',
-                )}
-              >
-                <p className="min-w-[14rem] flex-1 break-words text-sm">{idea.text}</p>
-
-                <ScorePicker
-                  label="Impact"
-                  value={idea.impact}
-                  onChange={(value) => store.updateIdea(idea.id, { impact: value })}
-                />
-                <ScorePicker
-                  label="Effort"
-                  value={idea.effort}
-                  onChange={(value) => store.updateIdea(idea.id, { effort: value })}
-                />
-
-                <span className="w-9 shrink-0 text-right text-2xs font-semibold text-brand">
-                  {score.toFixed(2)}
-                </span>
-
-                <div className="flex shrink-0 items-center gap-1">
-                  {idea.notionUrl ? (
-                    <a
-                      href={idea.notionUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open in Notion"
-                      className="button size-7 p-0 text-muted-foreground"
-                    >
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  ) : null}
-                  <button
-                    type="button"
-                    title="Approve to Planning"
-                    className="button size-7 p-0 text-success hover:bg-success/10"
-                    onClick={() => store.setIdeaDecision(idea.id, 'approved')}
-                  >
-                    <Check className="size-4" />
-                  </button>
-                  <button
-                    type="button"
-                    title="Deny"
-                    className="button size-7 p-0 text-muted-foreground hover:bg-danger/10 hover:text-danger"
-                    onClick={() => store.setIdeaDecision(idea.id, 'denied')}
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
-              </li>
-            )
-          })}
+          {ordered.map((idea) => (
+            <IdeaSelectionRow
+              key={idea.id}
+              idea={idea}
+              store={store}
+              highlighted={ideaScore(idea) === topScore}
+            />
+          ))}
         </ul>
       )}
 
@@ -457,7 +512,9 @@ export function ProcessPage({ store, stageId }) {
     <Page title={`${stage.number}. ${stage.title}`} description={`${stage.summary} Owner: ${stage.owners.join(' · ')}`}>
       <section className="flex w-full max-w-content-width flex-col gap-6 p-6">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">Notion is the source of truth. Edit drafts and project details there.</p>
+          <p className="text-xs text-muted-foreground">
+            Notion is the source of truth. Approve with filming and publish dates — they show up on the Notion calendars.
+          </p>
           <button type="button" className="button-secondary" onClick={() => store.refresh()} disabled={store.state.loading}>
             <RefreshCw className={cn('size-3.5', store.state.loading && 'animate-spin')} />
             Refresh

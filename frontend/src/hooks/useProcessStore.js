@@ -203,16 +203,24 @@ export function useProcessStore() {
     return updateRemote(id, allowed, (idea) => ({ ...idea, ...allowed }))
   }, [updateRemote])
 
-  const moveIdea = useCallback((id, stage) => (
-    updateRemote(id, { stage }, (idea) => ({
+  const moveIdea = useCallback((id, stage, extras = {}) => (
+    updateRemote(id, { stage, ...extras }, (idea) => ({
       ...idea,
+      ...extras,
       stage,
       stageName: stage,
+      filmingDate: extras.filmingDate ?? idea.filmingDate,
       decision: stage === 'denied'
         ? 'denied'
         : ['idea-generation', 'idea-selection'].includes(stage)
           ? 'pending'
           : 'approved',
+      data: {
+        ...idea.data,
+        filmingDate: extras.filmingDate ?? idea.data?.filmingDate,
+        publishDate: extras.publishDate ?? idea.data?.publishDate,
+        postedAt: extras.postedAt ?? idea.data?.postedAt,
+      },
     }))
   ), [updateRemote])
 
@@ -221,6 +229,11 @@ export function useProcessStore() {
     const toggling = idea?.decision === decision
     return moveIdea(id, toggling ? 'idea-selection' : decision === 'approved' ? 'planning' : 'denied')
   }, [moveIdea, state.ideas])
+
+  const approveIdea = useCallback((id, { filmingDate, publishDate }) => {
+    if (!filmingDate || !publishDate) return
+    return moveIdea(id, 'planning', { filmingDate, publishDate, dueDate: filmingDate })
+  }, [moveIdea])
 
   const advanceIdea = useCallback((id) => {
     const idea = state.ideas.find((item) => item.id === id)
@@ -239,7 +252,7 @@ export function useProcessStore() {
   }, [moveIdea, state.ideas])
 
   const markPosted = useCallback((id) => {
-    const now = new Date().toISOString()
+    const postedAt = new Date().toISOString()
     setState((prev) => ({
       ...prev,
       weeklyCounts: {
@@ -247,12 +260,8 @@ export function useProcessStore() {
         [currentWeek]: (prev.weeklyCounts[currentWeek] || 0) + 1,
       },
     }))
-    return updateRemote(
-      id,
-      { stage: 'engagement', publishDate: now },
-      (idea) => ({ ...idea, stage: 'engagement', data: { ...idea.data, publishDate: now } }),
-    )
-  }, [currentWeek, updateRemote])
+    return moveIdea(id, 'engagement', { postedAt })
+  }, [currentWeek, moveIdea])
 
   const setWeeklyCount = useCallback((count) => {
     setState((prev) => ({
@@ -264,8 +273,10 @@ export function useProcessStore() {
   const removeIdea = useCallback((id) => moveIdea(id, 'denied'), [moveIdea])
 
   const weeklyPostedFromNotion = useMemo(() => state.ideas.filter((idea) => {
-    const published = idea.data?.publishDate
-    return published && weekKey(new Date(published)) === currentWeek
+    const posted = idea.data?.postedAt || (
+      ['engagement', 'iteration', 'shipped'].includes(idea.stage) ? idea.data?.publishDate : null
+    )
+    return posted && weekKey(new Date(posted)) === currentWeek
   }).length, [currentWeek, state.ideas])
 
   return {
@@ -278,6 +289,7 @@ export function useProcessStore() {
     addIdea,
     updateIdea,
     setIdeaDecision,
+    approveIdea,
     advanceIdea,
     sendIdeaBack,
     markPosted,

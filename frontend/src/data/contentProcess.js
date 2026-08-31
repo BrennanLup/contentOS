@@ -69,7 +69,7 @@ export const STAGES = [
     accent: '#fb7185',
     owners: ['Brennan'],
     skippable: false,
-    summary: 'Score by impact + effort, then approve or deny. Come back each week and do more.',
+    summary: 'Score by impact + effort, then approve by locking a filming date and a publish date. Those dates sync to the Notion calendar.',
     branches: [
       {
         id: 'score',
