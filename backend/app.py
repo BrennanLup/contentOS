@@ -94,6 +94,24 @@ def zernio_webhook():
     return jsonify({'status': status})
 
 
+@app.route('/api/webhooks/slack', methods=['POST'])
+def slack_webhook():
+    raw_body = request.get_data()
+    ok, reason = zernio_slack.verify_slack_signature(
+        raw_body,
+        request.headers.get('X-Slack-Request-Timestamp'),
+        request.headers.get('X-Slack-Signature'),
+    )
+    if not ok:
+        return jsonify({'error': reason}), 401
+
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'invalid JSON body'}), 400
+
+    return jsonify(zernio_slack.handle_slack_event(payload))
+
+
 @app.route('/api/integrations/zernio/status', methods=['GET'])
 def zernio_integration_status():
     """Integration health check. Add ?test=1 to also send a Slack test message."""

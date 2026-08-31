@@ -4,12 +4,21 @@ Receives Zernio inbox webhooks (new comments on posts, new DMs) and forwards
 them to a Slack channel via a Slack incoming webhook.
 
 Environment variables:
-  ZERNIO_API_KEY         Zernio API key (sk_...). Used once at startup to
-                         auto-register the webhook subscription.
+  ZERNIO_API_KEY         Zernio API key (sk_...). Used to auto-register the
+                         webhook subscription and to send replies.
   ZERNIO_WEBHOOK_SECRET  Shared secret for HMAC signature verification.
                          Strongly recommended; without it any request to the
                          endpoint is accepted.
-  SLACK_WEBHOOK_URL      Slack incoming webhook URL (https://hooks.slack.com/...).
+  SLACK_BOT_TOKEN        Slack bot token (xoxb-...). Enables reply-from-Slack:
+                         notifications are posted by the bot with metadata,
+                         and thread replies are sent back through Zernio.
+  SLACK_CHANNEL_ID       Channel the bot posts to (C...). Required with the
+                         bot token.
+  SLACK_SIGNING_SECRET   Verifies that events on /api/webhooks/slack really
+                         come from Slack.
+  SLACK_WEBHOOK_URL      Legacy fallback: incoming webhook URL. Used only
+                         when the bot token/channel are not set (notify-only,
+                         no replies).
   PUBLIC_URL             Public base URL of this app. Falls back to
                          https://$RAILWAY_PUBLIC_DOMAIN on Railway.
 """
@@ -113,6 +122,8 @@ def _format_comment(payload):
         context_bits.append(f'<{post["permalink"]}|View post>')
     if account.get('username'):
         context_bits.append(f'Account: @{account["username"]}')
+    if _bot_mode_enabled():
+        context_bits.append('Reply in this thread to answer publicly')
 
     blocks = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(lines)}}]
     if context_bits:
@@ -121,7 +132,16 @@ def _format_comment(payload):
             'elements': [{'type': 'mrkdwn', 'text': ' · '.join(context_bits)}],
         })
     fallback = f'{kind} on {platform} from {who}: {text}'
-    return {'text': fallback, 'blocks': blocks}
+    return {
+        'text': fallback,
+        'blocks': blocks,
+        'metadata': {
+            'kind': 'comment',
+            'account_id': account.get('id') or account.get('accountId'),
+            'platform_post_id': comment.get('platformPostId'),
+            'comment_id': comment.get('id'),
+        },
+    }
 
 
 def _format_message(payload):
@@ -154,7 +174,10 @@ def _format_message(payload):
     context_bits = []
     if account.get('username'):
         context_bits.append(f'Account: @{account["username"]}')
-    context_bits.append('Reply from the Zernio inbox')
+    if _bot_mode_enabled():
+        context_bits.append('Reply in this thread to answer the DM')
+    else:
+        context_bits.append('Reply from the Zernio inbox')
 
     blocks = [{'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(lines)}}]
     blocks.append({
@@ -162,13 +185,59 @@ def _format_message(payload):
         'elements': [{'type': 'mrkdwn', 'text': ' · '.join(context_bits)}],
     })
     fallback = f'New DM on {platform} from {who}: {text or "(attachment)"}'
-    return {'text': fallback, 'blocks': blocks}
+    return {
+        'text': fallback,
+        'blocks': blocks,
+        'metadata': {
+            'kind': 'dm',
+            'account_id': account.get('id') or account.get('accountId'),
+            'conversation_id': conversation.get('id'),
+        },
+    }
+
+
+def _bot_mode_enabled():
+    return bool(os.environ.get('SLACK_BOT_TOKEN') and os.environ.get('SLACK_CHANNEL_ID'))
+
+
+def _slack_api(method, payload):
+    token = os.environ.get('SLACK_BOT_TOKEN')
+    resp = requests.post(
+        f'https://slack.com/api/{method}',
+        json=payload,
+        headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'},
+        timeout=10,
+    )
+    data = resp.json()
+    if not data.get('ok'):
+        logger.error('Slack %s failed: %s', method, data.get('error'))
+    return data
 
 
 def _send_to_slack(slack_payload):
+    """Post a notification. Prefers the bot (threads + reply metadata); falls
+    back to the incoming webhook, which can notify but not accept replies."""
+    metadata = slack_payload.pop('metadata', None)
+
+    if _bot_mode_enabled():
+        body = {
+            'channel': os.environ.get('SLACK_CHANNEL_ID'),
+            'text': slack_payload['text'],
+            'unfurl_links': False,
+        }
+        if slack_payload.get('blocks'):
+            body['blocks'] = slack_payload['blocks']
+        if metadata:
+            body['metadata'] = {'event_type': 'zernio_notification', 'event_payload': metadata}
+        try:
+            _slack_api('chat.postMessage', body)
+        except requests.RequestException:
+            logger.exception('Failed to post to Slack via bot')
+        return
+
     url = os.environ.get('SLACK_WEBHOOK_URL')
     if not url:
-        logger.warning('SLACK_WEBHOOK_URL not set; dropping notification: %s', slack_payload.get('text'))
+        logger.warning('No Slack credentials set; dropping notification: %s', slack_payload.get('text'))
         return
     try:
         resp = requests.post(url, json=slack_payload, timeout=10)
@@ -203,6 +272,134 @@ def handle_event(payload):
     # 5-second delivery timeout.
     threading.Thread(target=_send_to_slack, args=(slack_payload,), daemon=True).start()
     return 'notified'
+
+
+def verify_slack_signature(raw_body, timestamp, signature):
+    """Verify Slack's v0 request signature. Returns (ok, reason)."""
+    secret = os.environ.get('SLACK_SIGNING_SECRET')
+    if not secret:
+        return True, 'no signing secret configured'
+    if not timestamp or not signature:
+        return False, 'missing Slack signature headers'
+    import time
+    try:
+        if abs(time.time() - float(timestamp)) > 300:
+            return False, 'stale timestamp'
+    except ValueError:
+        return False, 'invalid timestamp'
+    base = b'v0:' + timestamp.encode() + b':' + raw_body
+    computed = 'v0=' + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed, signature):
+        return False, 'signature mismatch'
+    return True, 'ok'
+
+
+def _unescape_slack(text):
+    return text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
+
+
+def _send_zernio_reply(meta, text):
+    """Send a Slack thread reply back through Zernio. Returns (ok, detail)."""
+    api_key = os.environ.get('ZERNIO_API_KEY')
+    if not api_key:
+        return False, 'ZERNIO_API_KEY not set'
+    headers = {'Authorization': f'Bearer {api_key}'}
+
+    try:
+        if meta.get('kind') == 'comment':
+            post_id = meta.get('platform_post_id')
+            if not post_id:
+                return False, 'notification is missing the post ID'
+            body = {'accountId': meta.get('account_id'), 'message': text}
+            if meta.get('comment_id'):
+                body['commentId'] = meta['comment_id']
+            resp = requests.post(
+                f'{ZERNIO_API_BASE}/inbox/comments/{post_id}',
+                headers=headers, json=body, timeout=20,
+            )
+        elif meta.get('kind') == 'dm':
+            conversation_id = meta.get('conversation_id')
+            if not conversation_id:
+                return False, 'notification is missing the conversation ID'
+            resp = requests.post(
+                f'{ZERNIO_API_BASE}/inbox/conversations/{conversation_id}/messages',
+                headers=headers,
+                json={'accountId': meta.get('account_id'), 'message': text},
+                timeout=20,
+            )
+        else:
+            return False, 'unknown notification type'
+    except requests.RequestException as exc:
+        return False, f'request failed: {exc}'
+
+    if resp.status_code >= 300:
+        return False, f'Zernio returned {resp.status_code}: {resp.text[:200]}'
+    return True, 'sent'
+
+
+def _process_slack_reply(event):
+    channel = event.get('channel')
+    thread_ts = event.get('thread_ts')
+    reply_ts = event.get('ts')
+    try:
+        # Fetch the parent notification to read the Zernio IDs off its metadata.
+        token = os.environ.get('SLACK_BOT_TOKEN')
+        resp = requests.get(
+            'https://slack.com/api/conversations.replies',
+            params={'channel': channel, 'ts': thread_ts, 'limit': 1, 'include_all_metadata': 'true'},
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10,
+        )
+        data = resp.json()
+        if not data.get('ok'):
+            logger.error('conversations.replies failed: %s', data.get('error'))
+            return
+        parent = (data.get('messages') or [{}])[0]
+        meta_wrapper = parent.get('metadata') or {}
+        if meta_wrapper.get('event_type') != 'zernio_notification':
+            return  # a thread on some unrelated message; not ours to handle
+
+        meta = meta_wrapper.get('event_payload') or {}
+        text = _unescape_slack((event.get('text') or '').strip())
+        if not text:
+            _slack_api('chat.postMessage', {
+                'channel': channel, 'thread_ts': thread_ts,
+                'text': ':x: Empty reply — nothing was sent.',
+            })
+            return
+
+        ok, detail = _send_zernio_reply(meta, text)
+        if ok:
+            _slack_api('reactions.add', {'channel': channel, 'name': 'white_check_mark', 'timestamp': reply_ts})
+        else:
+            logger.error('Zernio reply failed: %s', detail)
+            _slack_api('chat.postMessage', {
+                'channel': channel, 'thread_ts': thread_ts,
+                'text': f':x: Could not send the reply: {detail}',
+            })
+    except requests.RequestException:
+        logger.exception('Failed processing Slack reply')
+
+
+def handle_slack_event(payload):
+    """Handle a verified Slack Events API request. Returns a JSON-able dict."""
+    if payload.get('type') == 'url_verification':
+        return {'challenge': payload.get('challenge')}
+    if payload.get('type') != 'event_callback':
+        return {'status': 'ignored'}
+    if _already_seen('slack:' + (payload.get('event_id') or '')):
+        return {'status': 'duplicate ignored'}
+
+    event = payload.get('event') or {}
+    if event.get('type') != 'message' or event.get('bot_id') or event.get('subtype'):
+        return {'status': 'ignored'}
+    thread_ts = event.get('thread_ts')
+    if not thread_ts or thread_ts == event.get('ts'):
+        return {'status': 'not a thread reply'}
+
+    # Ack fast (Slack retries after 3s); do the Zernio call in the background.
+    threading.Thread(target=_process_slack_reply, args=(event,), daemon=True).start()
+    return {'status': 'processing'}
 
 
 def _public_webhook_url():
@@ -284,8 +481,19 @@ def diagnostics(send_test=False):
         'zernio_api_key_set': bool(os.environ.get('ZERNIO_API_KEY')),
         'webhook_secret_set': bool(os.environ.get('ZERNIO_WEBHOOK_SECRET')),
         'slack_webhook_url_set': bool(os.environ.get('SLACK_WEBHOOK_URL')),
+        'slack_bot_token_set': bool(os.environ.get('SLACK_BOT_TOKEN')),
+        'slack_channel_id_set': bool(os.environ.get('SLACK_CHANNEL_ID')),
+        'slack_signing_secret_set': bool(os.environ.get('SLACK_SIGNING_SECRET')),
+        'reply_from_slack_enabled': _bot_mode_enabled(),
         'expected_webhook_url': _public_webhook_url(),
     }
+
+    if os.environ.get('SLACK_BOT_TOKEN'):
+        try:
+            auth = _slack_api('auth.test', {})
+            result['slack_bot_auth'] = 'ok' if auth.get('ok') else f"error: {auth.get('error')}"
+        except requests.RequestException as exc:
+            result['slack_bot_auth'] = f'error: {exc}'
 
     api_key = os.environ.get('ZERNIO_API_KEY')
     if api_key:
